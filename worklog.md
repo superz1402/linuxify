@@ -105,3 +105,32 @@ Companion files: `SESSION_STATE.md` (handoff), `docs/RECOVERY.md` (fresh-session
 - Disk is the tightest resource; SDK/Gradle caches must be pruned of the largest
   avoidable components (no NDK, no emulator images).
 - Session may end at any time → every completed task must be pushed immediately.
+
+### Task 2 — Runtime proof (Issue #2) + toolchain (Issue #1, partial)
+- Status: runtime drill PASS (host verification); toolchain installed; on-device BLOCKED (Issue #3)
+- Date: 2026-10-17
+
+Runtime drill (host = x86_64 Debian 13, proot-me v5.3.0 static + ubuntu-base 24.04.5 amd64):
+- rootfs SHA-256 verified against upstream SHA256SUMS: e77b6f10c2590cef872b33ee9f635a0e3fd1f57fb074c0e52b5c7f56147a0c86
+- STEP1 PASS: real shell in userspace; /etc/os-release = Ubuntu 24.04.5 LTS
+- STEP2 PASS: pwd=/root, ls, id — real commands
+- STEP3 PASS: file created inside userspace
+- STEP5 PASS: **PERSISTENCE_OK** — file survived proot process exit + relaunch
+- STEP6 note: base rootfs has no python3 (expected; apt-installable inside userspace)
+- Script: scripts/runtime_drill.sh (on server); command pattern recorded in docs/RUNTIME.md
+
+Android runtime binaries staged (app/src/main/jniLibs/):
+- arm64-v8a + x86_64: libproot.so, libtalloc.so, libshmem.so
+  (Termux apt pool, pinned proot 5.1.107.96 / libtalloc 2.5.0 / libandroid-shmem 0.7;
+   every .deb SHA-256 verified against dists/stable Packages metadata)
+- arm64-v8a + x86_64: libtermux.so — JNI bridge (createSubprocess/setPtyWindowSize/waitFor/close)
+  extracted from termux-app v0.118.0 release APK; symbols verified; provenance in runtime-binaries.json
+- Android 10+ exec restriction handled by jniLibs packaging (exec only from nativeLibraryDir)
+
+On-device verification blocker evidence (Issue #3):
+- `adb devices` → empty list; /dev/kvm absent → no emulator possible on this host.
+
+Toolchain (Issue #1):
+- Temurin JDK 21.0.12.1 (javac 21.0.12.1) at ~/toolchain/jdk-21
+- Android SDK: cmdline-tools 12.0 + platform-tools + platforms;android-35 + build-tools;35.0.0
+- Gradle 8.9 zip downloaded (wrapper to be generated with project)

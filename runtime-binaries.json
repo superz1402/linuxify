@@ -1,0 +1,92 @@
+{
+  "provenance": "Termux apt repository (packages.termux.dev), dists/stable, pinned via dists Packages SHA256",
+  "note": "binaries are built against Android bionic; exec() from app data is blocked on Android 10+, so they are packaged as jniLibs (lib*.so) and executed from nativeLibraryDir",
+  "binaries": [
+    {
+      "deb": "proot_arm64.deb",
+      "abi": "arm64-v8a",
+      "source": "data/data/com.termux/files/usr/bin/proot",
+      "packaged_as": "libproot.so",
+      "size": 247488,
+      "sha256_extracted": "1545b85b312505db6eb6908ff8b2ded0a77a3bd689c50ae85aa7c1d8445dd717",
+      "sha256_deb": "8199dca06dccb693ec09fb1759e3e1ad08b4863f0c11c612f89c20bd9ecdc1a0"
+    },
+    {
+      "deb": "libtalloc_arm64.deb",
+      "abi": "arm64-v8a",
+      "source": "data/data/com.termux/files/usr/lib/libtalloc.so",
+      "packaged_as": "libtalloc.so",
+      "size": 33592,
+      "sha256_extracted": "742b438c4d09e276985a61d44164c9de207b6d8cc268f3018cb3001961bcb309",
+      "sha256_deb": "556591f43bb773ad8777e1a29522640866a55f95dab71914418b94a8c58ad5a7"
+    },
+    {
+      "deb": "shmem_arm64.deb",
+      "abi": "arm64-v8a",
+      "source": "data/data/com.termux/files/usr/lib/libandroid-shmem.so",
+      "packaged_as": "libshmem.so",
+      "size": 14432,
+      "sha256_extracted": "84475798e07c8174dbbfaec70a827fdb02f19ffa69a589380c13e7507fd0e731",
+      "sha256_deb": "0da3a24d558b93c92bcf8d611e0826a99ff96e396b148e6cdf33b47c47c57ff6"
+    },
+    {
+      "deb": "proot_x64.deb",
+      "abi": "x86_64",
+      "source": "data/data/com.termux/files/usr/bin/proot",
+      "packaged_as": "libproot.so",
+      "size": 263784,
+      "sha256_extracted": "9a1303a51e69b89d78beaf40e4ec829c5c2ca98cbd5672411bdb15eebd871316",
+      "sha256_deb": "77ea45540071ca543adda2b51aca2bc3761c52904d013fd0890682288eff9455"
+    },
+    {
+      "deb": "libtalloc_x64.deb",
+      "abi": "x86_64",
+      "source": "data/data/com.termux/files/usr/lib/libtalloc.so",
+      "packaged_as": "libtalloc.so",
+      "size": 32536,
+      "sha256_extracted": "7fa6722a4320495b1b85832fc7fd02de0cb367b45f116c1921b2830a6936da90",
+      "sha256_deb": "b8c6d95f20075dc1f9ec6573575b2444e8d526e48e0d8d6d5cf4e071e6e06530"
+    },
+    {
+      "deb": "shmem_x64.deb",
+      "abi": "x86_64",
+      "source": "data/data/com.termux/files/usr/lib/libandroid-shmem.so",
+      "packaged_as": "libshmem.so",
+      "size": 14368,
+      "sha256_extracted": "092926060298acd3778e6239033d7aef1280dcb59aebe021a3719612e6a3465f",
+      "sha256_deb": "ffa9e4c87467b158b148d0ff92dda796aa038276c2075af3269cdcdb06f25797"
+    }
+  ],
+  "rootfs": {
+    "provenance": "Ubuntu cloud images (cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/), SHA256SUMS published at same location",
+    "variant": "ubuntu-base 24.04.5 (noble)",
+    "arm64": {
+      "file": "ubuntu-base-24.04.5-base-arm64.tar.gz",
+      "sha256": "a91d5a93010193712d346d761372b7c9db6dfcf093893161c64ca107f05914f2",
+      "url": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.5-base-arm64.tar.gz"
+    },
+    "amd64": {
+      "file": "ubuntu-base-24.04.5-base-amd64.tar.gz",
+      "sha256": "e77b6f10c2590cef872b33ee9f635a0e3fd1f57fb074c0e52b5c7f56147a0c86",
+      "url": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.5-base-amd64.tar.gz",
+      "host_drill_verified": true
+    }
+  },
+  "termux_jni": {
+    "provenance": "termux/termux-app v0.118.0 GitHub release debug universal APK (built from public GPLv3 source, NDK r22b, min Android 24)",
+    "arm64-v8a": {
+      "packaged_as": "libtermux.so",
+      "sha256": "9f8cb0b4dca25d399d340a97607b01cf230360872d5fa345a899bc753bfac1b0"
+    },
+    "x86_64": {
+      "packaged_as": "libtermux.so",
+      "sha256": "999e541cd75f29cf05ae7426e465e6fcd97982a3e15b322a68877a8180e6823a"
+    },
+    "exports": [
+      "Java_com_termux_terminal_JNI_createSubprocess",
+      "setPtyWindowSize",
+      "waitFor",
+      "close"
+    ]
+  }
+}
