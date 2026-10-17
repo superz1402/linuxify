@@ -1,0 +1,12 @@
+R_DEF: Internal format may change without notice
+local
+drawable ic_launcher_background
+drawable ic_launcher_foreground
+drawable text_select_handle_left_material
+drawable text_select_handle_right_material
+mipmap ic_launcher
+string app_name
+string copy_text
+string paste_text
+string text_selection_more
+style Theme.Linuxify
