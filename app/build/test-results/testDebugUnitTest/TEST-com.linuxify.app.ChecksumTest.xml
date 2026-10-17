@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.linuxify.app.ChecksumTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-10-17T09:05:40" hostname="c-6ad3275e-145cf406-4d51b9af3587" time="0.038">
+<testsuite name="com.linuxify.app.ChecksumTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-10-17T09:24:25" hostname="c-6ad3275e-145cf406-4d51b9af3587" time="0.053">
   <properties/>
-  <testcase name="empty stream digest" classname="com.linuxify.app.ChecksumTest" time="0.037"/>
-  <testcase name="sha256 of known vector" classname="com.linuxify.app.ChecksumTest" time="0.001"/>
-  <testcase name="matches is case-insensitive" classname="com.linuxify.app.ChecksumTest" time="0.0"/>
+  <testcase name="empty stream digest" classname="com.linuxify.app.ChecksumTest" time="0.016"/>
+  <testcase name="sha256 of known vector" classname="com.linuxify.app.ChecksumTest" time="0.002"/>
+  <testcase name="matches is case-insensitive" classname="com.linuxify.app.ChecksumTest" time="0.034"/>
   <system-out><![CDATA[]]></system-out>
   <system-err><![CDATA[]]></system-err>
 </testsuite>

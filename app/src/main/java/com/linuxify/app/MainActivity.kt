@@ -23,6 +23,7 @@ import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material.icons.Icons
@@ -87,9 +88,9 @@ fun LinuxifyRoot(vm: AppViewModel = viewModel()) {
     val currentRoute = backStack?.destination?.route ?: "home"
 
     // Installer gate: when runtime is not ready, show setup instead of main UI.
-    val runtimeReady = vm.installer.state.value.let {
-        it is com.linuxify.app.runtime.RootfsInstaller.InstallState.Ready
-    } || vm.installer.isReadyMarkerPresent()
+    val installState by vm.installer.state.collectAsStateWithLifecycle()
+    val runtimeReady = installState is com.linuxify.app.runtime.RootfsInstaller.InstallState.Ready ||
+        vm.installer.isReadyMarkerPresent()
 
     if (!runtimeReady) {
         SetupScreen(vm = vm, onInstalled = { vm.refreshHomeFacts() })

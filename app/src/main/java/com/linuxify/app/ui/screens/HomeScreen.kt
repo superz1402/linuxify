@@ -61,8 +61,7 @@ fun HomeScreen(
 
         val f = facts
         if (f == null) {
-            Spacer(Modifier.height(40.dp))
-            Text("Reading environment status…", style = MaterialTheme.typography.bodyMedium)
+            com.linuxify.app.ui.components.LoadingState("Reading environment status…")
             return@Column
         }
 

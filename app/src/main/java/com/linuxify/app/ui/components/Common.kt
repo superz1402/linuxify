@@ -93,3 +93,32 @@ fun EmptyState(
         Text(body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
+
+@Composable
+fun LoadingState(label: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.fillMaxWidth().padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        androidx.compose.material3.CircularProgressIndicator()
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+fun ErrorState(
+    title: String,
+    body: String,
+    modifier: Modifier = Modifier,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+) {
+    Column(modifier = modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
+        Text(body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (actionLabel != null && onAction != null) {
+            androidx.compose.material3.OutlinedButton(onClick = onAction) { Text(actionLabel) }
+        }
+    }
+}

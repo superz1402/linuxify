@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.linuxify.app.RuntimeMetadataTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-10-17T09:05:40" hostname="c-6ad3275e-145cf406-4d51b9af3587" time="0.005">
+<testsuite name="com.linuxify.app.RuntimeMetadataTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-10-17T09:24:25" hostname="c-6ad3275e-145cf406-4d51b9af3587" time="0.007">
   <properties/>
   <testcase name="x86_64 devices map to amd64 rootfs" classname="com.linuxify.app.RuntimeMetadataTest" time="0.003"/>
-  <testcase name="arm64 devices map to arm64 rootfs" classname="com.linuxify.app.RuntimeMetadataTest" time="0.0"/>
+  <testcase name="arm64 devices map to arm64 rootfs" classname="com.linuxify.app.RuntimeMetadataTest" time="0.001"/>
   <testcase name="unsupported abis return null" classname="com.linuxify.app.RuntimeMetadataTest" time="0.0"/>
-  <testcase name="urls are https and point to ubuntu cdimage" classname="com.linuxify.app.RuntimeMetadataTest" time="0.0"/>
+  <testcase name="urls are https and point to ubuntu cdimage" classname="com.linuxify.app.RuntimeMetadataTest" time="0.001"/>
   <system-out><![CDATA[]]></system-out>
   <system-err><![CDATA[]]></system-err>
 </testsuite>

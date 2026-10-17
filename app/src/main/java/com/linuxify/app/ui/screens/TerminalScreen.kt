@@ -1,6 +1,5 @@
 package com.linuxify.app.ui.screens
 
-import android.view.KeyEvent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -118,13 +117,6 @@ fun TerminalScreen(vm: AppViewModel) {
                     TerminalView(ctx, null).apply {
                         setTextSize(13)
                         attachSession(session)
-                        setOnKeyListener { _, keyCode, event ->
-                            if (event.action == KeyEvent.ACTION_DOWN && event.isSystem == false) {
-                                false // let TerminalView's own onKeyDown handle real keys
-                            } else {
-                                false
-                            }
-                        }
                     }
                 },
                 update = { view ->
