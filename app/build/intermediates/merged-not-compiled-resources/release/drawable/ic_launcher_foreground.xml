@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Terminal prompt ">_" motif, centered in the adaptive-icon safe zone (108dp grid, inner 66dp) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group>
+        <!-- ">" chevron -->
+        <path
+            android:fillColor="#5CC8D7"
+            android:pathData="M36,42 L48,54 L36,66 L40,70 L56,54 L40,38 Z" />
+        <!-- underscore -->
+        <path
+            android:fillColor="#8A93A6"
+            android:pathData="M60,66 L76,66 L76,70 L60,70 Z" />
+    </group>
+</vector>

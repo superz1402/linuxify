@@ -1,0 +1,22 @@
+[
+    {
+        "merged": "com.linuxify.app-release-52:/drawable_text_select_handle_left_material.xml.flat",
+        "source": "com.linuxify.app-main-53:/drawable/text_select_handle_left_material.xml"
+    },
+    {
+        "merged": "com.linuxify.app-release-52:/mipmap-anydpi-v26_ic_launcher.xml.flat",
+        "source": "com.linuxify.app-main-53:/mipmap-anydpi-v26/ic_launcher.xml"
+    },
+    {
+        "merged": "com.linuxify.app-release-52:/drawable_ic_launcher_foreground.xml.flat",
+        "source": "com.linuxify.app-main-53:/drawable/ic_launcher_foreground.xml"
+    },
+    {
+        "merged": "com.linuxify.app-release-52:/drawable_ic_launcher_background.xml.flat",
+        "source": "com.linuxify.app-main-53:/drawable/ic_launcher_background.xml"
+    },
+    {
+        "merged": "com.linuxify.app-release-52:/drawable_text_select_handle_right_material.xml.flat",
+        "source": "com.linuxify.app-main-53:/drawable/text_select_handle_right_material.xml"
+    }
+]

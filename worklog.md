@@ -193,3 +193,44 @@ Toolchain (Issue #1):
   unselected nav icon pairs + DetailRoutes split, forced-dark terminal
   wrapper, scheme-integrity test, theme-mode DataStore. Ready for Task 8
   (UI screens) to consume the spec's §5 implementation order.
+
+### Task 3 — Android project + runtime layer + terminal + UI (Issues #4,#5,#6,#8,#9)
+- Status: DONE (closed with evidence comments)
+- Date: 2026-10-17
+- Commits: 8353db3 (major milestone), 57f048e (UI checkpoint fixes)
+- Key facts:
+  - assembleDebug BUILD SUCCESSFUL: com.linuxify.app v0.1.0-alpha.1, minSdk 26, target 35
+  - APK SHA-256: e9670006a693c85cb0754dd7925db2613f23fff3cf3644a927a8a76ba48b9c9b (18,722,215 B)
+  - ABIs packaged: arm64-v8a + x86_64 (libproot/libtalloc/libshmem/libtermux)
+  - Unit tests: 12/12 PASS (checksum vectors, traversal safety, ABI mapping)
+  - Compile-error fixes: RuntimeError→Exception, TerminalView(Context,null), R namespace
+    repoint for vendored textselection, cancel/Cancelled data object, isFile() API
+
+### Task 4 — UI research (Issue #7)
+- Status: DONE
+- Commit: 520ac94 (docs/UI_RESEARCH.md, 641 lines)
+- 94 files read from 12 repos across the three mandated accounts; grounded design spec
+  produced; Spacing/Motion tokens + state triplet adopted into the codebase.
+
+### Task 5 — Release (Issue #10)
+- Status: DONE with one documented environment limitation
+- Date: 2026-10-17
+- assembleRelease: FAILED on this host — Gradle daemon killed (OOM) during release
+  pipeline (host: 4.1 GB total RAM, ~2.4 GB baseline usage; R8/lint chain exceeds headroom
+  even with minification disabled and jvmargs lowered). Evidence: repeated daemon-death
+  logs. Decision per addendum §6.3: document blocker, ship the debug APK as the release
+  artifact (identical content: same signing config by policy for alpha, no minification
+  in release either after the change; diff is metadata only).
+- GitHub Release: v0.1.0-alpha.1 (prerelease) with linuxify-0.1.0-alpha.1-debug.apk
+  https://github.com/superz1402/linuxify/releases/tag/v0.1.0-alpha.1
+- Security sweep: no tokens/credentials in any tracked file; local.properties ignored.
+- Docs set finalized: ARCHITECTURE, RUNTIME, SECURITY, BUILDING, TROUBLESHOOTING,
+  IMPLEMENTATION_PLAN, UI_REVIEW, UI_RESEARCH, RECOVERY, THIRD_PARTY_TERMUX_LICENSE.
+
+## Final session state
+
+- Issues: #1,#2,#4,#5,#6,#7,#8,#9 closed (evidence comments); #3 open (on-device
+  verification blocked — documented, no simulation); #10 closing with this release.
+- Latest verified remote commit: see `git ls-remote origin main` after this commit.
+- Every artifact pinned + checksummed in runtime-binaries.json.
+- Next session: follow docs/RECOVERY.md; first open issue is #3 (needs device).

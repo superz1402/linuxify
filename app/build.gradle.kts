@@ -22,8 +22,11 @@ android {
             isMinifyEnabled = false
         }
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            // Minification disabled for alpha: R8 exhausts memory on 4 GB CI hosts and
+            // the keep-rules already retain the entire terminal stack. Revisit for
+            // production releases with a dedicated signing identity (docs/BUILDING.md).
+            isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             // No release keystore exists yet; release builds are signed with the debug key
             // until the maintainer configures a real identity (documented in docs/BUILDING.md).
