@@ -134,3 +134,62 @@ Toolchain (Issue #1):
 - Temurin JDK 21.0.12.1 (javac 21.0.12.1) at ~/toolchain/jdk-21
 - Android SDK: cmdline-tools 12.0 + platform-tools + platforms;android-35 + build-tools;35.0.0
 - Gradle 8.9 zip downloaded (wrapper to be generated with project)
+
+---
+
+### Task 7 — UI research (Issue #7)
+- Task ID: 7
+- Agent: UI-research sub-agent (general-purpose)
+- Status: DONE
+- Date: 2026-10-17
+- Task: Deep UI reverse-engineering research of Android projects under GitHub
+  accounts bilal140202, ansaribilal14, superz1402, to ground Linuxify's UI
+  design (issue #7) in the maintainer's own shipped patterns. Research only —
+  no app code changed.
+- Work Log:
+  - Inventoried all three accounts via GitHub API (GET /users/<login>/repos,
+    token-authed): Bilal140202 (~70 repos, 13 Android-relevant Kotlin/Java),
+    ansaribilal14 (32 repos, 8 Android-relevant), superz1402 (18 repos, only
+    linuxify + agent-ui-playbook are UI-relevant).
+  - Fetched recursive git trees for 11 repos; downloaded 94 raw UI source
+    files (themes, tokens, navigation, screens, state composables, XML
+    layouts) — all fetched HTTP 200, no private/deleted/failed access; API
+    rate limit used: 4 core requests.
+  - Read and analyzed (evidence = real file paths, recorded in the doc):
+    Bilal140202/Your-Files-Redesign (Spacing/Type/Color/Theme/Modifiers/
+    Router/Empty/Loading/ScreenScaffold), Bilal140202/tabit-android
+    (Dimens tokens incl. motion+alpha, AppNavigation, MainActivity bottom-bar
+    whitelist, values-night), Bilal140202/AuraGallery (TopLevelDestination,
+    AuraBottomBar, IndexingProgressStrip), Bilal140202/comet-x-browser
+    (hybrid View XML cautionary tale), Bilal140202/MobileAgent (M2/XML
+    anti-pattern baseline), Bilal140202/VoxFlow (template-grade floor),
+    ansaribilal14/jarvis (StatusChip/ChipState, SectionCard, DoctorScreen
+    CheckState, ModelsScreen state machines, expressive theme),
+    ansaribilal14/open-video-engine-android (Tokens.kt governance, forced-
+    dark editor, no-dead-controls; found real light-scheme bug:
+    onSurfaceVariant mapped to Dark constant), ansaribilal14/zerium-browser
+    (+zerium-gecko twin: M3-in-XML mirror scheme, accent switching),
+    ansaribilal14/EchoID-Android (template-color drift + GlassCard
+    anti-pattern), ansaribilal14/tabit-android (v1 delta vs v2),
+    superz1402/agent-ui-playbook (13 UI laws), and the current Linuxify
+    theme/nav files locally.
+  - Deliverable written: docs/UI_RESEARCH.md — method+limitations, per-repo
+    findings with file-path evidence, 14 cross-cutting do's, 12
+    anti-patterns, and an actionable Linuxify design spec (typography scale,
+    spacing system, navigation model, status hierarchy, state triplet,
+    terminal ergonomics, implementation order for Task 8).
+  - Note: task brief pointed at /home/z/my-project/worklog.md which does not
+    exist; the authoritative worklog is this file (linuxify-app/worklog.md),
+    which was appended to instead. Deliverable path:
+    linuxify-app/docs/UI_RESEARCH.md.
+- Tests: N/A (research task). Verification = 94/94 raw fetches HTTP 200;
+  tree JSONs untruncated; every cited path present in the fetched tree or
+  local checkout.
+- Stage Summary: UI research complete and written to docs/UI_RESEARCH.md.
+  Conclusion: Linuxify's existing dark-first cyan theme + 5-tab nav + mono
+  tier are confirmed and should be extended (not replaced) with: Spacing/
+  Tokens objects, shared Empty/Loading/Error composables, StatusChip+
+  stepColor consolidation, ProgressStrip above the bottom bar, selected/
+  unselected nav icon pairs + DetailRoutes split, forced-dark terminal
+  wrapper, scheme-integrity test, theme-mode DataStore. Ready for Task 8
+  (UI screens) to consume the spec's §5 implementation order.
