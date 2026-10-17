@@ -48,17 +48,117 @@ class LinuxRuntime(private val ctx: Context) {
         return args
     }
 
-    /** Environment passed to proot and the guest processes. */
+    /**
+     * Environment passed to proot and the guest processes.
+     *
+     * LD_LIBRARY_PATH puts the private syslib shim directory (symlinks named
+     * like the exact sonames the bionic linker requests) ahead of the packaged
+     * native lib dir, so self-healed dependency names resolve on every spawn.
+     */
     fun buildEnv(): Map<String, String> = mapOf(
         "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         "HOME" to "/root",
         "TERM" to "xterm-256color",
         "LANG" to "C.UTF-8",
         "TMPDIR" to "/tmp",
-        "LD_LIBRARY_PATH" to RuntimeDirs.nativeLibDir(ctx).absolutePath,
+        "LD_LIBRARY_PATH" to listOf(
+            RuntimeDirs.syslibDir(ctx).absolutePath,
+            RuntimeDirs.nativeLibDir(ctx).absolutePath,
+        ).joinToString(":"),
         "PROOT_TMP_DIR" to RuntimeDirs.prootTmpDir(ctx).absolutePath,
         "PROOT_NO_SECCOMP" to "1",
     )
+
+    /**
+     * Verify the packaged proot binary can actually be loaded and executed by
+     * the bionic linker, and self-heal when it cannot.
+     *
+     * The linker resolves DT_NEEDED entries by literal file name and Android
+     * only extracts `lib*.so` names from the APK, so a versioned dependency
+     * (e.g. `libtalloc.so.2`) can fail to link even though the library ships
+     * as `libtalloc.so`. This preflight detects the exact failure from linker
+     * stderr, creates a private syslib shim (symlink) mapping the requested
+     * name onto the packaged library, and retries — no user interaction,
+     * no network. It runs before any rootfs download so a broken runtime
+     * fails fast, and it repairs name mismatches automatically.
+     *
+     * @return success when proot loads (its own exit code is irrelevant);
+     *   failure is a [RuntimeError.NativeDep] describing what could not be
+     *   resolved, or [RuntimeError.ProotMissing] when the binary is absent.
+     */
+    fun preflightProot(onLog: ((String) -> Unit)? = null): Result<Unit> {
+        val proot = RuntimeDirs.prootBinary(ctx)
+        if (!proot.exists()) {
+            return Result.failure(RuntimeError.ProotMissing("libproot.so not found in nativeLibraryDir"))
+        }
+        val libDir = RuntimeDirs.nativeLibDir(ctx)
+        val syslib = RuntimeDirs.syslibDir(ctx)
+        var lastOutput = ""
+        repeat(MAX_PREFLIGHT_ATTEMPTS) { attempt ->
+            val res = execDirect(
+                listOf(proot.absolutePath, "--version"),
+                timeoutMs = 30_000,
+            )
+            val output = res.stderr + res.stdout
+            if (!LinkerDiagnostics.isLinkFailure(output)) {
+                // proot itself ran — whatever rc it returned is its own business
+                onLog?.invoke("native runtime loadable (proot rc=${res.exitCode})")
+                return Result.success(Unit)
+            }
+            lastOutput = output
+            val missing = LinkerDiagnostics.missingLibrary(output)
+            if (missing == null) {
+                return Result.failure(
+                    RuntimeError.NativeDep("unknown", output.lineSequence().firstOrNull()?.take(300) ?: "linker failure"),
+                )
+            }
+            onLog?.invoke("linker cannot resolve $missing — attempting self-repair (attempt ${attempt + 1}/$MAX_PREFLIGHT_ATTEMPTS)")
+            val shims = NativeDepRepair.repairMissing(listOf(missing), libDir, syslib)
+            if (shims.isEmpty()) {
+                return Result.failure(
+                    RuntimeError.NativeDep(
+                        missing,
+                        "no packaged candidate in ${libDir.name} satisfies this library",
+                    ),
+                )
+            }
+            onLog?.invoke("self-healed: ${shims.joinToString(", ") { it.name }} shimmed -> retrying")
+        }
+        return Result.failure(
+            RuntimeError.NativeDep(
+                LinkerDiagnostics.missingLibrary(lastOutput) ?: "unknown",
+                "still failing after $MAX_PREFLIGHT_ATTEMPTS repair attempts",
+            ),
+        )
+    }
+
+    /** Direct (non-rootfs) bounded execution of a native binary, used by preflight. */
+    private fun execDirect(argv: List<String>, timeoutMs: Long): ExecResult {
+        val pb = ProcessBuilder(argv)
+        pb.environment().putAll(buildEnv())
+        pb.redirectErrorStream(false)
+        val proc: Process = try {
+            pb.start()
+        } catch (e: Exception) {
+            return ExecResult(-1, "", "failed to spawn ${argv.first()}: ${e.message}", false)
+        }
+        val out = StringBuilder()
+        val err = StringBuilder()
+        val tOut = Thread { proc.inputStream.bufferedReader().forEachLine { synchronized(out) { out.appendLine(it) } } }
+        val tErr = Thread { proc.errorStream.bufferedReader().forEachLine { synchronized(err) { err.appendLine(it) } } }
+        tOut.isDaemon = true
+        tErr.isDaemon = true
+        tOut.start()
+        tErr.start()
+        val finished = proc.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+        if (!finished) {
+            proc.destroyForcibly()
+            return ExecResult(-1, out.toString(), err.toString(), true)
+        }
+        tOut.join(2000)
+        tErr.join(2000)
+        return ExecResult(proc.exitValue(), out.toString(), err.toString(), false)
+    }
 
     /**
      * Bounded noninteractive execution inside the userspace.
@@ -138,6 +238,8 @@ class LinuxRuntime(private val ctx: Context) {
     }
 
     companion object {
+        private const val MAX_PREFLIGHT_ATTEMPTS = 3
+
         fun humanSize(bytes: Long): String = when {
             bytes >= 1L shl 30 -> "%.1f GB".format(bytes.toDouble() / (1L shl 30))
             bytes >= 1L shl 20 -> "%.1f MB".format(bytes.toDouble() / (1L shl 20))

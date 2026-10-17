@@ -92,6 +92,17 @@ class RootfsInstaller(private val ctx: Context) {
             if (!RuntimeDirs.prootAvailable(ctx)) {
                 throw RuntimeError.ProotMissing("libproot.so not found in nativeLibraryDir")
             }
+
+            // Native dependency preflight BEFORE downloading anything: proves the
+            // packaged proot actually links and runs on this device, and self-heals
+            // linker-visible dependency-name mismatches via private syslib shims.
+            // A broken runtime must fail here, not after a 35 MB download.
+            appendLog("checking native runtime…")
+            val preflight = LinuxRuntime(ctx).preflightProot { appendLog(it) }
+            if (preflight.isFailure) {
+                throw preflight.exceptionOrNull() as RuntimeError
+            }
+
             val artifact = RuntimeMetadata.artifactForAbi(android.os.Build.SUPPORTED_ABIS)
                 ?: throw RuntimeError.UnsupportedArch(android.os.Build.SUPPORTED_ABIS.joinToString(",").ifEmpty { "unknown" })
             appendLog("ABI: ${artifact.abi}; artifact: ${artifact.fileName}")
@@ -161,10 +172,25 @@ class RootfsInstaller(private val ctx: Context) {
             appendLog("verifying command execution…")
             val runtime = LinuxRuntime(ctx)
             val probe = runtime.boundedExec("uname -s && echo LINUXIFY_OK", timeoutMs = 60_000)
-            if (probe.exitCode != 0 || !probe.stdout.contains("LINUXIFY_OK")) {
+            val probePassed = probe.exitCode == 0 && probe.stdout.contains("LINUXIFY_OK")
+            if (!probePassed && LinkerDiagnostics.isLinkFailure(probe.stderr + probe.stdout)) {
+                // Defense in depth: the preflight should already have healed any
+                // dependency-name mismatch, but if the linker still choked here,
+                // repair once and retry instead of reporting a raw linker error.
+                appendLog("linker failure at verification — self-repair and retry")
+                runtime.preflightProot { appendLog(it) }
+                val retry = runtime.boundedExec("uname -s && echo LINUXIFY_OK", timeoutMs = 60_000)
+                if (retry.exitCode != 0 || !retry.stdout.contains("LINUXIFY_OK")) {
+                    throw RuntimeError.Verification(
+                        "uname probe failed after self-repair: rc=${retry.exitCode} out=${retry.stdout.take(200)} err=${retry.stderr.take(200)}",
+                    )
+                }
+                appendLog("verification ok after self-repair")
+            } else if (!probePassed) {
                 throw RuntimeError.Verification("uname probe failed: rc=${probe.exitCode} out=${probe.stdout.take(200)} err=${probe.stderr.take(200)}")
+            } else {
+                appendLog("verification ok: ${probe.stdout.trim().lineSequence().firstOrNull() ?: ""}")
             }
-            appendLog("verification ok: ${probe.stdout.trim().lineSequence().firstOrNull() ?: ""}")
 
             writeReadyMarker(artifact)
             appendLog("install complete")
@@ -196,6 +222,8 @@ class RootfsInstaller(private val ctx: Context) {
         is RuntimeError.Extraction -> "Extracting the Linux filesystem failed: ${e.why}"
         is RuntimeError.Verification -> "The Linux environment was installed but failed its startup verification: ${e.why}"
         is RuntimeError.ProotMissing -> "A required bundled component is missing from this APK build: ${e.detail}"
+        is RuntimeError.NativeDep ->
+            "The Linux runtime could not start because a required library (${e.missing}) is not available on this device: ${e.detail}. Install the latest Linuxify build — it ships all required libraries."
         is RuntimeError.Cancelled -> "Installation was cancelled."
         is RuntimeError.Io -> "Unexpected storage error: ${e.why}"
     }

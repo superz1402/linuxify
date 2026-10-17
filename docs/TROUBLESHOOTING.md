@@ -16,6 +16,19 @@ attempts the installer stops with the network error; retry from the same screen.
 **"A required bundled component is missing"** — The APK was built without the proot
 jniLibs. Rebuild from a clean checkout (see `docs/BUILDING.md`).
 
+**`library "libtalloc.so.2" not found: needed by main executable`** — This was a real
+bug in v0.1.0-alpha.1: the linker resolves `DT_NEEDED` by literal file name, Android
+only extracts `lib*.so` names from an APK, and proot asked for the versioned soname
+that could not be extracted. Fixed in v0.1.0-alpha.2 two ways: proot's `DT_NEEDED`
+strings are rewritten to the packaged names at build time, and the installer now runs
+a native-dependency preflight that self-heals any remaining name mismatch by symlinking
+the packaged library under the requested name in a private `syslib` directory (no user
+action needed). If you still see this error, you are running the old APK — update.
+
+**`library "…" not found` for a library other than libtalloc/libshmem** — The runtime
+preflight tried to map the missing soname onto a packaged library and could not. The
+error names the exact library; report it together with the technical log.
+
 ## Terminal
 
 **Terminal shows nothing after install** — Wait a moment; the first shell launch goes

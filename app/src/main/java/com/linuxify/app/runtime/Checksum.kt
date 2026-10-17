@@ -15,6 +15,11 @@ sealed class RuntimeError(val technical: String) : Exception(technical) {
     data class Extraction(val why: String) : RuntimeError("extraction: $why")
     data class Verification(val why: String) : RuntimeError("post-install verification failed: $why")
     data class ProotMissing(val detail: String) : RuntimeError("proot unavailable: $detail")
+
+    /** A native library the runtime needs could not be resolved or self-healed. */
+    data class NativeDep(val missing: String, val detail: String) :
+        RuntimeError("native dependency unresolvable: $missing: $detail")
+
     data object Cancelled : RuntimeError("cancelled")
     data class Io(val why: String) : RuntimeError("io: $why")
 }

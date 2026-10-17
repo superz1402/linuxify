@@ -234,3 +234,20 @@ Toolchain (Issue #1):
 - Latest verified remote commit: see `git ls-remote origin main` after this commit.
 - Every artifact pinned + checksummed in runtime-binaries.json.
 - Next session: follow docs/RECOVERY.md; first open issue is #3 (needs device).
+
+### Task 6 — fix device-verified startup failure: native dep name mismatch (Issue #11)
+- Status: DONE (build verification complete; on-device confirmation pending with user)
+- Date: 2026-10-17
+- Trigger: first real on-device drill of issue #3 failed: `CANNOT LINK EXECUTABLE "…/libproot.so": library "libtalloc.so.2" not found: needed by main executable` (rc=1, uname probe). This is genuine device evidence, not a hypothesis.
+- Root cause (ELF-inspection-confirmed on the bundled binaries):
+  - bionic resolves DT_NEEDED by literal file name; Android jniLibs extracts only `lib*.so` names;
+  - Termux proot needs `libtalloc.so.2` (and `libandroid-shmem.so`) — neither name can ever be extracted from the APK; we ship `libtalloc.so`/`libshmem.so`. Second mismatch would have surfaced after fixing the first.
+- Fix (two independent layers, no runtime code download):
+  - Build time: `tools/patch_elf_needed.py` rewrites proot DT_NEEDED in place (strictly-shorter names, NUL-padded; no ELF structure change). Both ABIs patched; digests recorded in runtime-binaries.json (`post_process.sha256_patched`): arm64 `b0d1f3f2…`, x86_64 `1ce2d86c…`.
+  - Runtime self-heal: `LinuxRuntime.preflightProot()` (runs before any rootfs download — fail fast) executes `libproot.so --version`; on linker failure `NativeDepRepair` maps the missing soname (pinned alias / version-strip) and symlinks it under the exact requested name in private `runtime/syslib`, prepended to LD_LIBRARY_PATH; up to 3 retries, offline, no user action. Defense-in-depth: verification probe also repairs+retries on linker failure. New `RuntimeError.NativeDep` with honest, precise user messaging.
+  - Rationale for NOT fetching libs at runtime: no executable bytes downloaded on device keeps the supply chain pinned to the APK (SECURITY-first per master prompt).
+- Tests: 23/23 PASS (12 pre-existing + 11 new NativeDepRepairTest incl. the real device error string, alias + version-strip mapping, shim idempotency, honest-failure cases). One iteration: isLinkFailure broadened to cover the `dlopen failed: library "X" not found` form after first run caught it.
+- Build (this server, restored from scratch per docs/RECOVERY.md): Temurin JDK 21.0.12.1 + SDK android-35/build-tools 35.0.0; assembleDebug BUILD SUCCESSFUL; APK `linuxify-0.1.0-alpha.2-debug.apk` 18,640,076 B, SHA-256 `1f6821d0ff10aea18eb32ae29eead2ce2db433527093eea03607d68f8272d768`; APK-internal verification: lib/arm64-v8a/libproot.so = patched digest b0d1f3f2…, DT_NEEDED `['libtalloc.so','libshmem.so','libc.so']` — all resolvable (two packaged, libc system).
+- 16 KB page-size risk from SESSION_STATE: CLEARED for current binaries — all bundled ELFs `PT_LOAD p_align = 0x4000` (recorded in runtime-binaries.json).
+- Environment note: system OpenJDK here is JRE-only (no jlink) → installed full Temurin JDK to ~/toolchain; first Kotlin daemon crash under memory pressure worked around by retry (in-process strategy not needed on final run).
+- Verification boundary (honest): build verification + ELF verification + unit tests done here; the on-device confirm (install → uname probe passes → persistence drill) is the user's step and closes issue #3.

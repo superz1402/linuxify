@@ -22,6 +22,14 @@ object RuntimeDirs {
     fun logsDir(ctx: Context): File = File(runtimeDir(ctx), "logs").apply { mkdirs() }
     fun prootTmpDir(ctx: Context): File = File(runtimeDir(ctx), "proot-tmp").apply { mkdirs() }
 
+    /**
+     * Private directory holding linker "shims": symlinks named exactly like
+     * the sonames the bionic linker requests (e.g. `libtalloc.so.2`) pointing
+     * at the packaged `lib*.so` equivalents. Prepended to LD_LIBRARY_PATH by
+     * [LinuxRuntime.buildEnv]. Created on demand by [NativeDepRepair].
+     */
+    fun syslibDir(ctx: Context): File = File(runtimeDir(ctx), "syslib").apply { mkdirs() }
+
     /** Directory containing the packaged native executables (proot). */
     fun nativeLibDir(ctx: Context): File = File(ctx.applicationInfo.nativeLibraryDir)
 

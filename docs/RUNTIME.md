@@ -27,12 +27,40 @@ libproot.so -0 --link2symlink --kill-on-exit \
 ```
 
 Environment: `PATH` (guest), `HOME=/root`, `TERM=xterm-256color`, `LANG=C.UTF-8`,
-`TMPDIR=/tmp`, `LD_LIBRARY_PATH=<nativeLibraryDir>` (so proot finds libtalloc),
-`PROOT_TMP_DIR` in app storage.
+`TMPDIR=/tmp`, `LD_LIBRARY_PATH=<syslibDir>:<nativeLibraryDir>` (so proot finds its
+libraries), `PROOT_TMP_DIR` in app storage.
 
 Android 10+ blocks exec() of files in writable app storage, so every native executable
 is packaged inside the APK as a `jniLibs/lib*.so` file; the OS extracts them to the
 read-only `nativeLibraryDir` from which execution is allowed.
+
+## Native dependency resolution (self-healing)
+
+The bionic linker resolves `DT_NEEDED` entries by **literal file name**. Android's APK
+extraction only unpacks files named `lib*.so`, so a binary needing a versioned soname
+such as `libtalloc.so.2` can fail on device with:
+
+```
+CANNOT LINK EXECUTABLE "…/libproot.so": library "libtalloc.so.2" not found: needed by main executable
+```
+
+even though the library ships inside the APK. Linuxify handles this at two layers:
+
+1. **Build time (primary):** `tools/patch_elf_needed.py` rewrites proot's `DT_NEEDED`
+   strings in place to the packaged names (`libtalloc.so.2` → `libtalloc.so`,
+   `libandroid-shmem.so` → `libshmem.so`). Only strictly shorter names are accepted, so
+   the edit is NUL-padded in place and every ELF offset stays valid. Provenance and the
+   patched digests are recorded in `runtime-binaries.json`.
+2. **Runtime (self-heal):** before any rootfs download, `LinuxRuntime.preflightProot()`
+   executes `libproot.so --version`. If the bionic linker reports a missing library,
+   `NativeDepRepair` maps it to a packaged candidate (pinned alias or version-stripped
+   soname), creates a symlink named exactly like the requested soname in the private
+   `runtime/syslib` directory (first entry of `LD_LIBRARY_PATH`), and retries — up to
+   three times, fully offline, no user interaction. If a library genuinely cannot be
+   satisfied, the install fails fast with a precise, honest error naming the library.
+
+This is deliberately not a runtime download of native code: no executable bytes are
+fetched over the network on device, keeping the supply chain pinned to the APK build.
 
 ## Terminal
 
@@ -70,5 +98,7 @@ is the vendored `terminal-emulator`/`terminal-view` code, rendered through a Com
 - Android may terminate background processes; servers are not guaranteed 24/7.
 - `apt-get` inside the guest runs as fake-root; dpkg works, but system-call-heavy
   postinst scripts occasionally need care.
-- 16 KB page-size devices (Android 15+ on some hardware): proot builds predate this;
-  a future pinned update will address it if required.
+- 16 KB page-size devices (Android 15+ on some hardware): **cleared for the currently
+  pinned binaries** — all bundled ELF files report `PT_LOAD p_align = 0x4000` (16 KB),
+  verified during the v0.1.0-alpha.2 fix (see `runtime-binaries.json`
+  `post_process.elf_alignment_check`). Re-verify this whenever binaries are re-pinned.
