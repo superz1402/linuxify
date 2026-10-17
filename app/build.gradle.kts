@@ -1,25 +1,59 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Stable signing identity: the SAME key signs debug and release builds, so an
+// update can always install over a previous build without uninstalling first.
+// keystore/keystore.properties + linuxify-release.jks are committed on purpose:
+// losing this key would force every user to uninstall on the next update.
+val keystoreProperties = Properties().apply {
+    val f = rootProject.file("keystore/keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
 android {
     namespace = "com.linuxify.app"
     compileSdk = 35
 
+    signingConfigs {
+        create("linuxify") {
+            if (keystoreProperties.isNotEmpty()) {
+                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     defaultConfig {
         applicationId = "com.linuxify.app"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 2
-        versionName = "0.1.0-alpha.2"
+        // targetSdk MUST stay below 29: Android 10+ forbids executing binaries
+        // from app-private storage for apps targeting >= 29 (SELinux
+        // untrusted_app domain), and the whole Linux userspace (proot guests)
+        // lives in app-private storage. targetSdk 28 keeps the app in the
+        // untrusted_app_27 domain, which still allows exec — this is the same
+        // approach Termux, UserLAnd and every proot-based Android app uses.
+        // compileSdk stays 35 so we keep modern toolchain/API availability.
+        targetSdk = 28
+        versionCode = 3
+        versionName = "0.1.0-alpha.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         debug {
             isMinifyEnabled = false
+            signingConfig = if (keystoreProperties.isNotEmpty()) {
+                signingConfigs.getByName("linuxify")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
         release {
             // Minification disabled for alpha: R8 exhausts memory on 4 GB CI hosts and
@@ -28,9 +62,11 @@ android {
             isMinifyEnabled = false
             isShrinkResources = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // No release keystore exists yet; release builds are signed with the debug key
-            // until the maintainer configures a real identity (documented in docs/BUILDING.md).
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (keystoreProperties.isNotEmpty()) {
+                signingConfigs.getByName("linuxify")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
     compileOptions {
@@ -54,6 +90,14 @@ android {
     }
     testOptions {
         unitTests.isIncludeAndroidResources = false
+    }
+    lint {
+        // targetSdk 28 is a deliberate, documented decision (see defaultConfig
+        // above and docs/RUNTIME.md): proot guests exec from app-private
+        // storage, which Android blocks for targetSdk >= 29. This app is
+        // sideloaded, not distributed via Play, so the Play Store policy lint
+        // does not apply.
+        disable += "ExpiredTargetSdkVersion"
     }
 }
 

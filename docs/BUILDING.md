@@ -36,7 +36,7 @@ echo "sdk.dir=$ANDROID_HOME" > local.properties   # machine-local, not committed
 
 ./gradlew assembleDebug          # debug APK
 ./gradlew testDebugUnitTest      # unit tests
-./gradlew assembleRelease        # release APK (debug-signed until maintainer keys exist)
+./gradlew assembleRelease        # release APK (keystore-signed, see Signing below)
 ```
 
 Outputs: `app/build/outputs/apk/debug/app-debug.apk`,
@@ -44,17 +44,26 @@ Outputs: `app/build/outputs/apk/debug/app-debug.apk`,
 
 ## Signing
 
-Debug builds use the standard generated debug keystore. Release builds currently reuse
-the debug signing config **by explicit choice** so that a testable artifact exists;
-this is not a production identity. A maintainer must provision a real keystore:
+Since v0.1.0-alpha.3 both debug and release builds are signed with the project's own
+stable identity, so **updates install over previous builds without uninstalling**:
 
-1. Generate a keystore outside the repo (`*.jks` is gitignored).
-2. Add `RELEASE_STORE_FILE`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_ALIAS`,
-   `RELEASE_KEY_PASSWORD` to a non-committed `gradle.properties` or CI secrets.
-3. Replace the `signingConfig = signingConfigs.getByName("debug")` line in
-   `app/build.gradle.kts`.
+- `keystore/linuxify-release.jks` — the key (PKCS12, RSA 4096, alias `linuxify`,
+  validity 10000 days)
+- `keystore/keystore.properties` — `storeFile` / `storePassword` / `keyAlias` /
+  `keyPassword` consumed by `app/build.gradle.kts`
 
-Never commit keystore files or passwords.
+**Deliberate deviation from the usual advice:** these two files are committed. The
+reason is product-critical: losing the key would force every existing user to
+uninstall on the next update — the exact problem this change exists to fix. The repo
+is private and the keystore is only for this alpha; if the project ever goes public or
+to a store, rotate to a CI-secret-based identity and treat the committed key as
+compromised.
+
+If `keystore/keystore.properties` is absent (fresh clone without the folder), the
+build falls back to the standard debug keystore so it never hard-fails — but such
+builds will NOT install over keystore-signed builds.
+
+Never change the keystore between releases.
 
 ## Verifying an APK
 
@@ -65,4 +74,10 @@ unzip -l app-debug.apk | grep "lib/"    # native ABI payloads
 ```
 
 Expected: `package: name='com.linuxify.app'`, `sdkVersion:'26'`,
-`targetSdkVersion:'35'`, `lib/arm64-v8a/*` and `lib/x86_64/*` payloads.
+`targetSdkVersion:'28'`, `lib/arm64-v8a/*` and `lib/x86_64/*` payloads.
+
+> Why targetSdk 28 and not 35: Android 10+ denies `execve()` of files in app-private
+> storage for apps targeting ≥ 29, and the Linux userspace (proot guests) runs
+> exactly from there. targetSdk 28 keeps the app in the `untrusted_app_27` SELinux
+> domain, which still allows exec — the same trade-off Termux and UserLAnd make.
+> `compileSdk` stays 35. See docs/RUNTIME.md "Incident record" for the full story.

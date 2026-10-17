@@ -11,9 +11,20 @@ import java.io.InputStream
  *
  * Security rules (master prompt §4.3):
  *  - reject absolute paths and any path resolving outside the destination
- *  - symlinks/hardlinks are validated: their target must stay inside the destination
+ *  - symlinks/hardlinks are validated: their target must resolve inside the
+ *    destination AFTER normalizing `..` segments (a target like
+ *    `../lib/x86_64-linux-gnu/ld-linux.so.2` is legitimate inside a rootfs and
+ *    MUST be preserved — silently dropping it breaks the ELF interpreter chain
+ *    and every guest exec fails with `execve: No such file or directory`)
  *  - device/fifo special entries are skipped (not applicable in a userspace rootfs)
  *  - a hard cap on total extracted size guards against archive bombs
+ *
+ * Fidelity rules (learned from the on-device install failure v0.1.0-alpha.2):
+ *  - every extractable entry must land on disk; anything genuinely unsafe is
+ *    recorded in [Result.skipped] so the installer can surface it instead of
+ *    shipping a silently incomplete rootfs
+ *  - link creation never fails silently: if the filesystem refuses a symlink,
+ *    the extractor copies the resolved target content as a fallback
  */
 class SafeTarExtractor(
     private val destDir: File,
@@ -21,7 +32,9 @@ class SafeTarExtractor(
     private val onEntry: ((name: String) -> Unit)? = null,
 ) {
 
-    data class Result(val entries: Int, val bytes: Long)
+    data class Result(val entries: Int, val bytes: Long, val skipped: List<String> = emptyList())
+
+    private val skipped = mutableListOf<String>()
 
     /** Return the sanitized relative path of a tar entry, or null if it must be skipped. */
     fun sanitizePath(name: String): String? {
@@ -34,6 +47,59 @@ class SafeTarExtractor(
         if (parts.isEmpty()) return null
         if (parts.any { it == ".." }) return null // traversal — reject
         return parts.joinToString("/")
+    }
+
+    /**
+     * Normalize [target] (a symlink or hardlink target, absolute or relative)
+     * against the directory containing the link ([linkRel]) and return the
+     * canonical rootfs-relative path, or null when it escapes the rootfs.
+     *
+     * This is the correct security boundary for links: `..` is only dangerous
+     * when it walks OUT of the rootfs, never merely by appearing in the text.
+     * (usrmerge layouts rely on `../lib/...`-style links for the ELF loaders.)
+     */
+    fun resolveLinkInsideRootfs(linkRel: String, target: String): String? {
+        val base = linkRel.substringBeforeLast('/', "")
+            .split('/').filter { it.isNotEmpty() && it != "." }
+        var depth = 0
+        // absolute targets start from the root, relative ones from the link's dir
+        val segments = target.split('/')
+        var sawRoot = target.startsWith("/")
+        val stack = ArrayDeque<String>()
+        if (!sawRoot) base.forEach { stack.addLast(it) }
+        for (seg in segments) {
+            when (seg) {
+                "", "." -> {}
+                ".." -> {
+                    if (stack.isEmpty()) return null // escapes the rootfs — reject
+                    stack.removeLast()
+                }
+                else -> stack.addLast(seg)
+            }
+        }
+        if (stack.isEmpty()) return null // link to "/" itself — nothing to create
+        return stack.joinToString("/")
+    }
+
+    /**
+     * Normalize a HARDLINK target to a rootfs-relative path, or null when it
+     * escapes. POSIX tar hardlink targets are relative to the ARCHIVE ROOT
+     * (unlike symlink targets, which are relative to the link's directory).
+     */
+    fun resolveHardlinkInsideRootfs(linkName: String): String? {
+        var n = linkName.replace('\\', '/')
+        while (n.startsWith("./")) n = n.substring(2)
+        n = n.removePrefix("/")
+        val stack = ArrayDeque<String>()
+        for (seg in n.split('/')) {
+            when (seg) {
+                "", "." -> {}
+                ".." -> if (stack.isNotEmpty()) stack.removeLast() else return null
+                else -> stack.addLast(seg)
+            }
+        }
+        if (stack.isEmpty()) return null
+        return stack.joinToString("/")
     }
 
     private fun resolveInside(rel: String): File {
@@ -50,13 +116,19 @@ class SafeTarExtractor(
     fun extract(input: InputStream, onProgress: ((bytes: Long) -> Unit)? = null): Result {
         var entries = 0
         var totalBytes = 0L
+        skipped.clear()
+        val deferredHardlinks = mutableListOf<Pair<String, String>>() // rel -> resolved source rel
         destDir.mkdirs()
         if (!destDir.isDirectory) throw RuntimeError.Extraction("destination is not a directory: $destDir")
 
         TarArchiveInputStream(GzipCompressorInputStream(input.buffered())).use { tar ->
             while (true) {
                 val entry: TarArchiveEntry = tar.nextTarEntry ?: break
-                val rel = sanitizePath(entry.name) ?: continue
+                val rel = sanitizePath(entry.name)
+                if (rel == null) {
+                    skipped.add("${entry.name} (unsafe path)")
+                    continue
+                }
                 onEntry?.invoke(rel)
                 val target = resolveInside(rel)
 
@@ -68,23 +140,31 @@ class SafeTarExtractor(
                     }
                     entry.isSymbolicLink -> {
                         val linkTarget = entry.linkName
-                        val resolved = safeResolveLink(rel, linkTarget)
-                        if (resolved != null) {
+                        val resolved = resolveLinkInsideRootfs(rel, linkTarget)
+                        if (resolved == null) {
+                            skipped.add("$rel -> $linkTarget (link escapes rootfs)")
+                        } else {
                             target.parentFile?.mkdirs()
                             if (!createSymlink(linkTarget, target)) {
-                                // If symlink creation fails (filesystem support), fall back
-                                // to copying the target content when possible.
-                                copyLinkTargetIfPossible(linkTarget, target)
+                                // Filesystem refused the symlink (rare on app-private
+                                // storage): fall back to materializing the link's
+                                // resolved content so the path still works.
+                                if (!copyResolvedTargetIfPossible(resolved, target)) {
+                                    skipped.add("$rel -> $linkTarget (symlink refused, no copyable target)")
+                                }
                             }
                         }
                     }
                     entry.isLink -> {
-                        // hardlink: resolve inside rootfs and copy content
-                        val linkRel = sanitizePath(entry.linkName)
-                        if (linkRel != null) {
-                            val src = resolveInside(linkRel)
-                            target.parentFile?.mkdirs()
-                            if (src.isFile) src.copyTo(target, overwrite = true)
+                        // hardlink: target is archive-root-relative (POSIX); the
+                        // source may appear LATER in the archive (ubuntu-base
+                        // ships usr/bin/perl5.38.2 as a hardlink to usr/bin/perl,
+                        // with perl stored after it), so defer to a second pass.
+                        val linkRel = resolveHardlinkInsideRootfs(entry.linkName)
+                        if (linkRel == null) {
+                            skipped.add("$rel -> ${entry.linkName} (hardlink escapes rootfs)")
+                        } else {
+                            deferredHardlinks.add(rel to linkRel)
                         }
                     }
                     entry.isFIFO || entry.isBlockDevice || entry.isCharacterDevice -> {
@@ -103,27 +183,26 @@ class SafeTarExtractor(
                 onProgress?.invoke(totalBytes)
             }
         }
-        return Result(entries, totalBytes)
-    }
-
-    private fun safeResolveLink(linkRel: String, target: String): String? {
-        // Validate that the link target cannot escape the rootfs via combined path
-        val base = linkRel.substringBeforeLast('/', "")
-        val combined = if (target.startsWith("/")) {
-            target.removePrefix("/")
-        } else if (base.isEmpty()) target else "$base/$target"
-        val sanitized = sanitizePath(combined) ?: return null
-        // reject .. after resolution through segments
-        if (sanitized.split('/').any { it == ".." }) return null
-        return sanitized
+        // second pass: hardlink sources now exist regardless of archive order
+        for ((rel, srcRel) in deferredHardlinks) {
+            val target = resolveInside(rel)
+            val src = resolveInside(srcRel)
+            target.parentFile?.mkdirs()
+            if (src.isFile) {
+                src.copyTo(target, overwrite = true)
+            } else {
+                skipped.add("$rel -> $srcRel (hardlink source absent)")
+            }
+        }
+        return Result(entries, totalBytes, skipped.toList())
     }
 
     private fun createSymlink(linkTarget: String, target: File): Boolean = try {
-        if (target.exists() || target.toString().let { java.nio.file.Files.isSymbolicLink(java.nio.file.Path.of(it)) }) {
+        if (target.exists() || java.nio.file.Files.isSymbolicLink(target.toPath())) {
             target.delete()
         }
         java.nio.file.Files.createSymbolicLink(
-            java.nio.file.Path.of(target.path),
+            target.toPath(),
             java.nio.file.Path.of(linkTarget),
         )
         true
@@ -131,14 +210,23 @@ class SafeTarExtractor(
         false
     }
 
-    private fun copyLinkTargetIfPossible(linkTarget: String, target: File) {
-        if (!linkTarget.startsWith("/")) return
-        // Absolute link target inside the rootfs (common: /usr/bin -> bin)
-        val src = File(destDir, linkTarget.removePrefix("/"))
+    /**
+     * Materialize a link whose symlink creation failed by copying the CONTENT
+     * of its rootfs-resolved path. Works for relative AND absolute targets
+     * because [resolveLinkInsideRootfs] already normalized them.
+     */
+    private fun copyResolvedTargetIfPossible(resolved: String, target: File): Boolean {
+        val src = File(destDir, resolved)
         if (src.isFile) {
             target.parentFile?.mkdirs()
-            src.copyTo(target, overwrite = true)
+            return try {
+                src.copyTo(target, overwrite = true)
+                true
+            } catch (_: Exception) {
+                false
+            }
         }
+        return false
     }
 
     private fun copyWithLimit(

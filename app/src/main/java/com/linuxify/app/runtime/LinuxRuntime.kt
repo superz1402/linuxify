@@ -133,14 +133,23 @@ class LinuxRuntime(private val ctx: Context) {
     }
 
     /** Direct (non-rootfs) bounded execution of a native binary, used by preflight. */
-    private fun execDirect(argv: List<String>, timeoutMs: Long): ExecResult {
+    private fun execDirect(argv: List<String>, timeoutMs: Long): ExecResult =
+        spawnAndCollect(argv, buildEnv(), timeoutMs, spawnErrorPrefix = "failed to spawn ${argv.first()}")
+
+    /** Shared bounded process runner for all non-PTY runtime spawns. */
+    private fun spawnAndCollect(
+        argv: List<String>,
+        env: Map<String, String>,
+        timeoutMs: Long,
+        spawnErrorPrefix: String = "failed to spawn proot",
+    ): ExecResult {
         val pb = ProcessBuilder(argv)
-        pb.environment().putAll(buildEnv())
+        pb.environment().putAll(env)
         pb.redirectErrorStream(false)
         val proc: Process = try {
             pb.start()
         } catch (e: Exception) {
-            return ExecResult(-1, "", "failed to spawn ${argv.first()}: ${e.message}", false)
+            return ExecResult(-1, "", "$spawnErrorPrefix: ${e.message}", false)
         }
         val out = StringBuilder()
         val err = StringBuilder()
@@ -163,12 +172,19 @@ class LinuxRuntime(private val ctx: Context) {
     /**
      * Bounded noninteractive execution inside the userspace.
      * Uses ProcessBuilder (not a PTY) — for apt ops, probes, and tool runs.
+     *
+     * The command runs through /bin/bash -lc (or an explicit [shell]) with a
+     * prelude that unsets LD_LIBRARY_PATH: that variable exists for proot's own
+     * bionic linking (syslib shims) and must not leak into the guest, where it
+     * could shadow guest libraries with host binaries after apt installs new
+     * packages (e.g. samba pulling in libtalloc).
      */
     fun boundedExec(
         command: String,
         workdir: String = "/root",
         timeoutMs: Long = 120_000,
         onOutput: ((line: String) -> Unit)? = null,
+        shell: String = "/bin/bash",
     ): ExecResult {
         val proot = RuntimeDirs.prootBinary(ctx)
         require(proot.exists()) { "proot binary missing" }
@@ -176,48 +192,31 @@ class LinuxRuntime(private val ctx: Context) {
             proot.absolutePath,
         )
         argv += buildProotArgs(workdir)
-        argv += listOf("/bin/bash", "-lc", command)
+        argv += listOf(shell, "-lc", GUEST_ENV_PRELUDE + command)
 
-        val pb = ProcessBuilder(argv)
-        val env = pb.environment()
-        env.putAll(buildEnv())
-        pb.redirectErrorStream(false)
-
-        val proc: Process
-        try {
-            proc = pb.start()
-        } catch (e: Exception) {
-            return ExecResult(-1, "", "failed to spawn proot: ${e.message}", false)
-        }
-
-        val outBuilder = StringBuilder()
-        val errBuilder = StringBuilder()
-        val outThread = Thread {
-            proc.inputStream.bufferedReader().forEachLine { line ->
-                synchronized(outBuilder) { outBuilder.appendLine(line) }
-                onOutput?.invoke(line)
+        return spawnAndCollect(argv, buildEnv(), timeoutMs).let { res ->
+            if (onOutput != null) {
+                res.stdout.lineSequence().filter { it.isNotEmpty() }.forEach(onOutput)
             }
+            res
         }
-        val errThread = Thread {
-            proc.errorStream.bufferedReader().forEachLine { line ->
-                synchronized(errBuilder) { errBuilder.appendLine(line) }
-            }
-        }
-        outThread.isDaemon = true
-        errThread.isDaemon = true
-        outThread.start()
-        errThread.start()
+    }
 
-        val finished = proc.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
-        if (!finished) {
-            proc.destroyForcibly()
-            return ExecResult(-1, outBuilder.toString(), errBuilder.toString(), true)
-        }
-        outThread.join(2000)
-        errThread.join(2000)
-        val out = synchronized(outBuilder) { outBuilder.toString() }
-        val err = synchronized(errBuilder) { errBuilder.toString() }
-        return ExecResult(proc.exitValue(), out, err, false)
+    /**
+     * Bounded execution of an explicit argv inside the userspace (no shell).
+     * Used by verification probes that must not depend on a shell existing.
+     */
+    fun execInRootfs(
+        guestArgv: List<String>,
+        workdir: String = "/root",
+        timeoutMs: Long = 60_000,
+    ): ExecResult {
+        val proot = RuntimeDirs.prootBinary(ctx)
+        require(proot.exists()) { "proot binary missing" }
+        val argv = mutableListOf(proot.absolutePath)
+        argv += buildProotArgs(workdir)
+        argv += guestArgv
+        return spawnAndCollect(argv, buildEnv(), timeoutMs)
     }
 
     /** List a directory inside the rootfs directly from app-private storage (no proot needed). */
@@ -239,6 +238,9 @@ class LinuxRuntime(private val ctx: Context) {
 
     companion object {
         private const val MAX_PREFLIGHT_ATTEMPTS = 3
+
+        /** Unset before every guest command so host shim paths never shadow guest libs. */
+        const val GUEST_ENV_PRELUDE = "unset LD_LIBRARY_PATH 2>/dev/null; "
 
         fun humanSize(bytes: Long): String = when {
             bytes >= 1L shl 30 -> "%.1f GB".format(bytes.toDouble() / (1L shl 30))

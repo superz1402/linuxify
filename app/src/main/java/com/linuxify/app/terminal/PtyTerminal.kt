@@ -30,9 +30,14 @@ object PtyTerminal {
         val argv = mutableListOf(proot.absolutePath)
         argv += runtime.buildProotArgs(workdir)
         argv += "/bin/bash"
-        argv += "-l"
-        if (initialCommand != null) {
-            argv += listOf("-c", initialCommand)
+        argv += "-lc"
+        // unset LD_LIBRARY_PATH for the guest: it exists for proot's own bionic
+        // linking (syslib shims) and must not shadow guest libraries; then hand
+        // over to a real login shell so profile.d and PS1 behave normally.
+        argv += if (initialCommand != null) {
+            LinuxRuntime.GUEST_ENV_PRELUDE + "exec /bin/bash -l -c " + shQuote(initialCommand)
+        } else {
+            LinuxRuntime.GUEST_ENV_PRELUDE + "exec /bin/bash -l"
         }
 
         val env = runtime.buildEnv().map { "${it.key}=${it.value}" }.toTypedArray()
@@ -48,4 +53,7 @@ object PtyTerminal {
             client,
         )
     }
+
+    /** POSIX single-quote escaping for embedding a command inside sh -c. */
+    private fun shQuote(s: String): String = "'" + s.replace("'", "'\\''") + "'"
 }

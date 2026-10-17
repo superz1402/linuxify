@@ -169,28 +169,32 @@ class RootfsInstaller(private val ctx: Context) {
             writeStage("promoted", artifact)
 
             _state.value = InstallState.VerifyingInstall
-            appendLog("verifying command execution…")
-            val runtime = LinuxRuntime(ctx)
-            val probe = runtime.boundedExec("uname -s && echo LINUXIFY_OK", timeoutMs = 60_000)
-            val probePassed = probe.exitCode == 0 && probe.stdout.contains("LINUXIFY_OK")
-            if (!probePassed && LinkerDiagnostics.isLinkFailure(probe.stderr + probe.stdout)) {
-                // Defense in depth: the preflight should already have healed any
-                // dependency-name mismatch, but if the linker still choked here,
-                // repair once and retry instead of reporting a raw linker error.
-                appendLog("linker failure at verification — self-repair and retry")
-                runtime.preflightProot { appendLog(it) }
-                val retry = runtime.boundedExec("uname -s && echo LINUXIFY_OK", timeoutMs = 60_000)
-                if (retry.exitCode != 0 || !retry.stdout.contains("LINUXIFY_OK")) {
-                    throw RuntimeError.Verification(
-                        "uname probe failed after self-repair: rc=${retry.exitCode} out=${retry.stdout.take(200)} err=${retry.stderr.take(200)}",
+
+            // --- auto self setup: verify the tree the way proot will consume it, ---
+            // --- and repair anything the extraction or the filesystem got wrong ---
+            appendLog("verifying rootfs integrity…")
+            var problems = RootfsIntegrity.verify(rootfs, artifact.abi)
+            if (problems.isNotEmpty()) {
+                appendLog("integrity: ${problems.size} issue(s) found — auto-repairing (no user action needed)")
+                if (!RootfsIntegrity.repair(rootfs, archive, problems) { appendLog(it) }) {
+                    throw RuntimeError.Extraction(
+                        "rootfs auto-repair could not restore: ${problems.take(5).joinToString(", ")}",
                     )
                 }
-                appendLog("verification ok after self-repair")
-            } else if (!probePassed) {
-                throw RuntimeError.Verification("uname probe failed: rc=${probe.exitCode} out=${probe.stdout.take(200)} err=${probe.stderr.take(200)}")
+                problems = RootfsIntegrity.verify(rootfs, artifact.abi)
+                if (problems.isNotEmpty()) {
+                    throw RuntimeError.Extraction(
+                        "rootfs still incomplete after auto-repair: ${problems.take(5).joinToString(", ")}",
+                    )
+                }
+                appendLog("integrity ok after auto-repair")
             } else {
-                appendLog("verification ok: ${probe.stdout.trim().lineSequence().firstOrNull() ?: ""}")
+                appendLog("integrity ok (${RootfsIntegrity.criticalPaths(artifact.abi).size} critical paths + full link audit)")
             }
+
+            appendLog("verifying command execution…")
+            val runtime = LinuxRuntime(ctx)
+            verifyExec(runtime, artifact, archive)
 
             writeReadyMarker(artifact)
             appendLog("install complete")
@@ -208,6 +212,66 @@ class RootfsInstaller(private val ctx: Context) {
             _state.value = InstallState.Failed(err, "Installation failed unexpectedly. Technical details are available in the log.")
             Result.failure(err)
         }
+    }
+
+    /**
+     * Exec verification with layered fallbacks and self-healing — the install
+     * only fails here when every automatic fix has been attempted.
+     *
+     * Attempt chain (each retried once after an automatic repair):
+     *  1. /bin/bash -lc "uname -s && echo LINUXIFY_OK"   (full shell path)
+     *  2. /bin/sh   -c  "uname -s && echo LINUXIFY_OK"   (dash instead of bash)
+     *  3. /usr/bin/uname                                  (no shell dependency)
+     *
+     * Between attempts: linker failures trigger the native shim repair, any
+     * other failure triggers the rootfs integrity verify + auto-repair.
+     */
+    private fun verifyExec(runtime: LinuxRuntime, artifact: RuntimeMetadata.RootfsArtifact, archive: File) {
+        data class Attempt(val label: String, val run: () -> LinuxRuntime.ExecResult)
+
+        val attempts = listOf(
+            Attempt("bash") { runtime.boundedExec("uname -s && echo LINUXIFY_OK", timeoutMs = 60_000) },
+            Attempt("sh") { runtime.boundedExec("uname -s && echo LINUXIFY_OK", timeoutMs = 60_000, shell = "/bin/sh") },
+            Attempt("direct uname") { runtime.execInRootfs(listOf("/usr/bin/uname"), timeoutMs = 60_000) },
+        )
+        var last: LinuxRuntime.ExecResult? = null
+        for (attempt in attempts) {
+            var res = attempt.run()
+            if (passed(res)) {
+                appendLog("verification ok via ${attempt.label}: ${res.stdout.trim().lineSequence().firstOrNull() ?: ""}")
+                return
+            }
+            val combined = res.stderr + res.stdout
+            if (LinkerDiagnostics.isLinkFailure(combined)) {
+                appendLog("linker failure at verification (${attempt.label}) — self-repair and retry")
+                runtime.preflightProot { appendLog(it) }
+                res = attempt.run()
+                if (passed(res)) {
+                    appendLog("verification ok via ${attempt.label} after native self-repair")
+                    return
+                }
+            }
+            appendLog("probe ${attempt.label} failed: rc=${res.exitCode} err=${res.stderr.trim().take(160)}")
+            appendLog("auto-repair: re-verifying rootfs integrity before next attempt")
+            val problems = RootfsIntegrity.verify(RuntimeDirs.rootfsDir(ctx), artifact.abi)
+            if (problems.isNotEmpty()) {
+                appendLog("integrity: ${problems.size} issue(s) — repairing")
+                RootfsIntegrity.repair(RuntimeDirs.rootfsDir(ctx), archive, problems) { appendLog(it) }
+            } else {
+                appendLog("integrity clean — failure is at exec level, trying next fallback")
+            }
+            last = res
+        }
+        val r = last
+        throw RuntimeError.Verification(
+            "all ${attempts.size} exec probes failed (bash, sh, direct uname). " +
+                "last: rc=${r?.exitCode} out=${r?.stdout?.take(200)} err=${r?.stderr?.take(300)}",
+        )
+    }
+
+    private fun passed(res: LinuxRuntime.ExecResult): Boolean {
+        val combined = res.stdout + res.stderr
+        return res.exitCode == 0 && (combined.contains("LINUXIFY_OK") || combined.trim().contains("Linux"))
     }
 
     private fun userMessageFor(e: RuntimeError): String = when (e) {

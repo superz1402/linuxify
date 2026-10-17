@@ -1,22 +1,38 @@
 # SESSION_STATE.md — Linuxify Android
 
-Concise handoff for the next agent session. Current as of 2026-10-17 (Task 6 complete — device-reported startup bug fixed).
+Concise handoff for the next agent session. Current as of 2026-10-17 (Task 7 complete — second device-reported bug fixed, auto self-setup, stable signing; v0.1.0-alpha.3).
 
 ## Repository & branch
 
 - Canonical repo: https://github.com/superz1402/linuxify — branch `main`
 - Latest verified remote commit: see `git ls-remote origin main`
 - Releases:
-  - v0.1.0-alpha.2 (current; fixes issue #11) — asset linuxify-0.1.0-alpha.2-debug.apk, SHA-256 1f6821d0ff10aea1…
+  - v0.1.0-alpha.3 (current) — install self-heals; targetSdk 28; stable signing (no more uninstall-per-update); assets: linuxify-0.1.0-alpha.3-release.apk + -debug.apk
+  - v0.1.0-alpha.2 (superseded; had the SafeTarExtractor `..`-symlink drop found on device)
   - v0.1.0-alpha.1 (superseded; had the jniLibs DT_NEEDED bug found on device)
 
 ## Status of issues
 
-- CLOSED with evidence: #1 #2 #4 #5 #6 #7 #8 #9 (prior sessions), #11 (libtalloc.so.2
-  linker failure — fixed in v0.1.0-alpha.2: build-time DT_NEEDED patch + runtime
-  preflight/self-heal; build-verified, ELF-verified, 23/23 unit tests)
-- OPEN: #3 (on-device verification) — the user's first real device drill produced the
-  evidence that surfaced #11; device drill must be re-run with v0.1.0-alpha.2 to close #3.
+- CLOSED with evidence: #1 #2 #4 #5 #6 #7 #8 #9 #11 (prior sessions)
+- OPEN: #3 (on-device verification) — two device drills so far each surfaced one real
+  bug (talloc linker mismatch -> fixed alpha.2; `..`-symlink drop breaking the ELF
+  loader chain -> fixed alpha.3). Re-run the device drill with alpha.3: install should
+  complete with ZERO errors (integrity verify + auto-repair + layered exec probes all
+  run automatically), then close #3.
+
+## Signing (changed in alpha.3)
+
+- `keystore/linuxify-release.jks` + `keystore/keystore.properties` are COMMITTED ON
+  PURPOSE: stable identity across debug and release means updates install over
+  previous builds without uninstalling. Cert SHA-256: 8f55e46675c284931e79f3ccc7fde4fad8970f6af4d506f5b75ed3edd7bdcca9.
+- NEVER regenerate or move these files between releases; see docs/BUILDING.md.
+
+## targetSdk 28 (changed in alpha.3 — do not raise)
+
+- Android 10+ blocks execve() from app-private storage for targetSdk >= 29; the whole
+  proot userspace lives there. targetSdk 28 keeps untrusted_app_27 (exec allowed) —
+  same trade-off as Termux/UserLAnd. Lint check ExpiredTargetSdkVersion is disabled
+  with rationale in app/build.gradle.kts.
 
 ## Build environment (this server)
 

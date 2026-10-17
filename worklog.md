@@ -251,3 +251,64 @@ Toolchain (Issue #1):
 - 16 KB page-size risk from SESSION_STATE: CLEARED for current binaries — all bundled ELFs `PT_LOAD p_align = 0x4000` (recorded in runtime-binaries.json).
 - Environment note: system OpenJDK here is JRE-only (no jlink) → installed full Temurin JDK to ~/toolchain; first Kotlin daemon crash under memory pressure worked around by retry (in-process strategy not needed on final run).
 - Verification boundary (honest): build verification + ELF verification + unit tests done here; the on-device confirm (install → uname probe passes → persistence drill) is the user's step and closes issue #3.
+
+### Task 7 — fix second on-device install failure (execve ENOENT) + auto self-setup + stable signing (v0.1.0-alpha.3)
+- Status: DONE (build verification + real host runtime drill complete; on-device confirmation pending with user)
+- Date: 2026-10-17
+- Trigger: user's second real device drill — rootfs install completed but probe failed:
+  `proot error: execve("/usr/bin/bash"): No such file or directory` (after the Task 6
+  talloc fix had already been confirmed working on device: `native runtime loadable (proot rc=0)`).
+- Root cause (REPRODUCED END-TO-END on the build host, not guessed):
+  - `SafeTarExtractor` silently dropped EVERY symlink whose target text contained `..`.
+    A `..` in a link target is only dangerous when it escapes the rootfs; Ubuntu 24.04's
+    usrmerge layout legitimately relies on such links. 66 entries dropped on arm64
+    (incl. etc/os-release, usr/bin/ld.so, usr/lib/apt/planners/dump); on amd64 the dropped
+    set contained the dynamic loader link itself
+    (`usr/lib64/ld-linux-x86-64.so.2 -> ../lib/x86_64-linux-gnu/ld-linux-x86-64.so.2`),
+    so bash's PT_INTERP could not resolve and every guest exec returned ENOENT while the
+    app's `bin/bash` readiness gate still passed (host-JVM symlinks succeeded; on-device
+    a smaller symlink subset was enough to pass the gate but not proot's exec chain).
+  - Second latent issue (also fixed): Android 10+ forbids execve() from app-private
+    storage for apps targeting SDK >= 29 — targetSdk lowered 35 -> 28 (untrusted_app_27
+    domain), the same approach Termux/UserLAnd use. compileSdk stays 35.
+  - Third latent issue fixed: proot's own LD_LIBRARY_PATH (syslib shims) leaked into the
+    guest, where it could shadow guest libraries after apt installs (e.g. libtalloc2);
+    guest commands/PTY shells now unset it.
+- Fixes:
+  - SafeTarExtractor: `..`-targets normalized segment-wise, links kept when they resolve
+    inside the rootfs (targets preserved verbatim); escaping links RECORDED in
+    `Result.skipped` — never dropped silently; hardlink targets resolved relative to the
+    ARCHIVE ROOT (POSIX) and resolved in a second pass (ubuntu-base stores
+    usr/bin/perl5.38.2 before usr/bin/perl).
+  - NEW RootfsIntegrity: post-extract verification of every exec-critical path (loader
+    chain first) with rootfs-relative resolution; auto-repair re-extracts exactly the
+    affected entries from the cached checksum-verified artifact — no network, no user
+    action. Upstream-dangling links (locale catalogs) deliberately NOT gated (they exist
+    in the upstream tarball and proot/apt never dereference them).
+  - RootfsInstaller: integrity gate + auto-repair between install and probe; exec probe
+    is now a layered fallback chain (bash -lc -> sh -c -> direct /usr/bin/uname) with
+    self-heal retries (linker shim repair / rootfs repair) — install only fails after
+    every automatic fix has been attempted, and the technical log shows each step.
+  - PtyTerminal/boundedExec: guest env hygiene (unset LD_LIBRARY_PATH).
+  - Signing: dedicated stable keystore `keystore/linuxify-release.jks` (+ keystore.properties,
+    both committed deliberately so updates never require an uninstall; documented
+    trade-off in docs/BUILDING.md). Debug AND release use the same identity
+    (cert SHA-256 8f55e46675c284931e79f3ccc7fde4fad8970f6af4d506f5b75ed3edd7bdcca9).
+  - Lint: ExpiredTargetSdkVersion disabled with rationale (sideload-only alpha).
+- Verification (honest labels):
+  - REAL host runtime drill (repo's actual extractor + real proot 5.3.0 + pinned
+    artifacts): both ABIs extract with 0 skipped entries and 0 integrity problems;
+    real bash executes inside the extracted rootfs: `uname -s` -> `Linux`,
+    `LINUXIFY_OK`, perl chain OK, rc=0. The broken extractor previously reproduced the
+    EXACT device error on amd64 (same message, same proot hint block) — fix verified
+    by differential drill.
+  - Unit tests: 32/32 PASS (23 prior + 9 new regression tests incl. `..`-loader links,
+    hardlink order, archive-root-relative hardlink resolution, RootfsIntegrity
+    verify/repair cycle, absolute-target rootfs-relative resolution).
+  - Build: assembleDebug + assembleRelease BUILD SUCCESSFUL (Temurin JDK 21, SDK 35);
+    release APK 12,417,925+ B; targetSdkVersion:'28' confirmed via aapt; both APKs
+    verified with apksigner (same cert).
+  - On-device confirmation of alpha.3 (install with zero errors -> PTY shell ->
+    persistence drill) is the user's next step and closes issue #3.
+- Artifacts: linuxify-0.1.0-alpha.3-release.apk / linuxify-0.1.0-alpha.3-debug.apk
+  (GitHub release v0.1.0-alpha.3 + build outputs).

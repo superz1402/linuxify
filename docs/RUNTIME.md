@@ -62,6 +62,70 @@ even though the library ships inside the APK. Linuxify handles this at two layer
 This is deliberately not a runtime download of native code: no executable bytes are
 fetched over the network on device, keeping the supply chain pinned to the APK build.
 
+## Post-install integrity verification + auto-repair (v0.1.0-alpha.3)
+
+The installer never hands a partially extracted rootfs to proot. After extraction and
+before the first exec, `RootfsIntegrity.verify()` checks every path the guest needs at
+exec time — the ELF interpreter chain first among them — using **rootfs-relative**
+resolution (absolute symlink targets such as `/lib/...` are resolved against the
+rootfs, never against the Android host filesystem). If anything is missing, the
+installer **auto-repairs** by re-extracting exactly the affected entries from the
+already-downloaded, checksum-verified artifact — no network, no user interaction.
+
+Exec verification itself is layered, so a single fragile path cannot fail the install:
+
+1. `/bin/bash -lc "uname -s && echo LINUXIFY_OK"` (full bash path)
+2. `/bin/sh -c "uname -s && echo LINUXIFY_OK"` (dash fallback)
+3. `/usr/bin/uname` invoked directly (no shell dependency)
+
+Between attempts the installer re-runs the native shim preflight (linker failures) and
+the rootfs integrity check + repair (any other failure). Only if every automatic fix
+has been attempted does the install report an error — and the technical log then shows
+each self-healing step that was taken.
+
+## Incident record: v0.1.0-alpha.2 on-device install failure
+
+**Symptom (real device, arm64):**
+
+```
+proot error: execve("/usr/bin/bash"): No such file or directory
+```
+
+**Root cause (reproduced end-to-end on the build host):** `SafeTarExtractor` rejected
+every symlink whose target *text* contained `..` and silently dropped the entry. A
+`..` inside a link target is only dangerous when it escapes the rootfs; the usrmerge
+layout of Ubuntu 24.04 legitimately relies on such links. On amd64 the dropped set
+included the dynamic loader itself
+(`usr/lib64/ld-linux-x86-64.so.2 -> ../lib/x86_64-linux-gnu/ld-linux-x86-64.so.2`),
+so the kernel/proot could not resolve bash's `PT_INTERP` and every guest exec failed
+with ENOENT — even though `bin/bash` itself existed and the app's readiness gate
+(`File(staging, "bin/bash").isFile`) passed. 66 entries were dropped on arm64
+(incl. `etc/os-release`, `usr/bin/ld.so`, `usr/lib/apt/planners/dump`).
+
+**Fixes:**
+
+- `SafeTarExtractor` now normalizes `..` segment-by-segment and keeps every link that
+  stays inside the rootfs (targets preserved verbatim on disk). Links that genuinely
+  escape are recorded in `Result.skipped` — never dropped silently.
+- Hardlink targets are resolved relative to the **archive root** (POSIX), and hardlink
+  entries whose source appears later in the archive are resolved in a second pass
+  (ubuntu-base stores `usr/bin/perl5.38.2` before `usr/bin/perl`).
+- `RootfsIntegrity` verifies the tree post-extraction and auto-repairs from the cached
+  artifact (see previous section).
+- Guest processes no longer inherit `LD_LIBRARY_PATH` (it exists for proot's own
+  bionic linking; leaking it into the guest could shadow guest libraries after
+  `apt install` pulls in e.g. `libtalloc2`).
+- `targetSdk` lowered 35 → 28 (see `app/build.gradle.kts`): Android 10+ forbids
+  executing binaries from app-private storage for apps targeting ≥ 29; the entire
+  guest userspace lives in app-private storage. targetSdk 28 keeps the app in the
+  `untrusted_app_27` SELinux domain where exec from app data is allowed — the same
+  approach Termux and UserLAnd use.
+
+**Host drill (real, not simulated):** the repo's actual extractor + real proot 5.3.0
+against the pinned artifacts — both ABIs extract with 0 skipped entries and 0
+integrity problems; real bash runs inside the extracted rootfs and returns
+`Linux / LINUXIFY_OK` (`PROOT_RC=0`). On-device verification of alpha.3 is pending.
+
 ## Terminal
 
 Real pseudo-terminals via the vendored Termux JNI bridge: `JNI.createSubprocess()`

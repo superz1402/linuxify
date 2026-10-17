@@ -12,6 +12,10 @@ local.properties
 *.keystore
 !debug.keystore
 *.jks
+# Stable release identity is committed ON PURPOSE so updates never require an
+# uninstall (see docs/BUILDING.md "Signing").
+!keystore/linuxify-release.jks
+!keystore/keystore.properties
 secrets.properties
 android-sdk/
 /build
