@@ -113,11 +113,13 @@ class SafeTarExtractor(
         return f
     }
 
+    private data class HardlinkToCopy(val rel: String, val srcRel: String, val mode: Int)
+
     fun extract(input: InputStream, onProgress: ((bytes: Long) -> Unit)? = null): Result {
         var entries = 0
         var totalBytes = 0L
         skipped.clear()
-        val deferredHardlinks = mutableListOf<Pair<String, String>>() // rel -> resolved source rel
+        val deferredHardlinks = mutableListOf<HardlinkToCopy>()
         destDir.mkdirs()
         if (!destDir.isDirectory) throw RuntimeError.Extraction("destination is not a directory: $destDir")
 
@@ -137,6 +139,7 @@ class SafeTarExtractor(
                         if (!target.isDirectory && !target.mkdirs() && !target.isDirectory) {
                             throw RuntimeError.Extraction("cannot create dir: $rel")
                         }
+                        RootfsIntegrity.applyTarMode(target, entry.mode, directory = true)
                     }
                     entry.isSymbolicLink -> {
                         val linkTarget = entry.linkName
@@ -149,7 +152,7 @@ class SafeTarExtractor(
                                 // Filesystem refused the symlink (rare on app-private
                                 // storage): fall back to materializing the link's
                                 // resolved content so the path still works.
-                                if (!copyResolvedTargetIfPossible(resolved, target)) {
+                                if (!copyResolvedTargetIfPossible(resolved, target, entry.mode)) {
                                     skipped.add("$rel -> $linkTarget (symlink refused, no copyable target)")
                                 }
                             }
@@ -164,7 +167,7 @@ class SafeTarExtractor(
                         if (linkRel == null) {
                             skipped.add("$rel -> ${entry.linkName} (hardlink escapes rootfs)")
                         } else {
-                            deferredHardlinks.add(rel to linkRel)
+                            deferredHardlinks.add(HardlinkToCopy(rel, linkRel, entry.mode))
                         }
                     }
                     entry.isFIFO || entry.isBlockDevice || entry.isCharacterDevice -> {
@@ -184,12 +187,16 @@ class SafeTarExtractor(
             }
         }
         // second pass: hardlink sources now exist regardless of archive order
-        for ((rel, srcRel) in deferredHardlinks) {
+        for ((rel, srcRel, mode) in deferredHardlinks) {
             val target = resolveInside(rel)
             val src = resolveInside(srcRel)
             target.parentFile?.mkdirs()
             if (src.isFile) {
                 src.copyTo(target, overwrite = true)
+                // File.copyTo() does NOT carry permissions: without this the
+                // copy lands 0660 and every hardlinked executable (perl,
+                // gunzip's uncompress alias) would later fail with EACCES.
+                RootfsIntegrity.applyTarMode(target, mode)
             } else {
                 skipped.add("$rel -> $srcRel (hardlink source absent)")
             }
@@ -213,14 +220,17 @@ class SafeTarExtractor(
     /**
      * Materialize a link whose symlink creation failed by copying the CONTENT
      * of its rootfs-resolved path. Works for relative AND absolute targets
-     * because [resolveLinkInsideRootfs] already normalized them.
+     * because [resolveLinkInsideRootfs] already normalized them. The tar entry
+     * mode is applied because File.copyTo() lands the copy with default bits
+     * (0660) — a fallback copy of an executable would otherwise be unexecuable.
      */
-    private fun copyResolvedTargetIfPossible(resolved: String, target: File): Boolean {
+    private fun copyResolvedTargetIfPossible(resolved: String, target: File, mode: Int): Boolean {
         val src = File(destDir, resolved)
         if (src.isFile) {
             target.parentFile?.mkdirs()
             return try {
                 src.copyTo(target, overwrite = true)
+                RootfsIntegrity.applyTarMode(target, mode)
                 true
             } catch (_: Exception) {
                 false
@@ -251,10 +261,10 @@ class SafeTarExtractor(
                 written += n
             }
         }
-        // best-effort permission restore (tar mode bits): any execute bit -> executable
-        if (mode and 0b001001001 != 0) {
-            target.setExecutable(true, false)
-        }
+        // Full mode-bit restoration (tar fidelity): executables keep +x exactly
+        // where the tarball has it, non-executables stay non-executable. Owner
+        // read/write is forced as a floor so the installer can always repair.
+        RootfsIntegrity.applyTarMode(target, mode)
         return written
     }
 }

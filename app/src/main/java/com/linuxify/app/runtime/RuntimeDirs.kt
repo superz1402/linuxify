@@ -35,9 +35,31 @@ object RuntimeDirs {
 
     fun prootBinary(ctx: Context): File = File(nativeLibDir(ctx), "libproot.so")
 
+    /**
+     * proot's ELF loader, shipped as libproot-loader.so (Termux packages it at
+     * usr/libexec/proot/loader).
+     *
+     * Termux builds proot with PROOT_UNBUNDLE_LOADER, so the tracer does NOT
+     * embed its loader: every guest execve is rewritten to exec this separate
+     * static binary, which maps the guest ELF and its interpreter using host
+     * paths proot prepared (src/execve/enter.c, get_loader_path():
+     * `getenv("PROOT_LOADER") ?: PROOT_UNBUNDLE_LOADER "/loader"`). Without it,
+     * proot falls back to the hardcoded /data/data/com.termux/... path — which
+     * is either absent (ENOENT, the alpha.2 on-device failure) or belongs to a
+     * foreign app uid (EACCES, the alpha.3 failure). LinuxRuntime.buildEnv()
+     * therefore always points PROOT_LOADER here.
+     */
+    fun prootLoaderBinary(ctx: Context): File = File(nativeLibDir(ctx), "libproot-loader.so")
+
     /** True when the packaged proot executable exists and is executable. */
     fun prootAvailable(ctx: Context): Boolean {
         val p = prootBinary(ctx)
+        return p.exists() && p.canExecute()
+    }
+
+    /** True when proot's ELF loader is packaged and executable. */
+    fun prootLoaderAvailable(ctx: Context): Boolean {
+        val p = prootLoaderBinary(ctx)
         return p.exists() && p.canExecute()
     }
 

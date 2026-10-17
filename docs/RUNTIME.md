@@ -27,12 +27,43 @@ libproot.so -0 --link2symlink --kill-on-exit \
 ```
 
 Environment: `PATH` (guest), `HOME=/root`, `TERM=xterm-256color`, `LANG=C.UTF-8`,
-`TMPDIR=/tmp`, `LD_LIBRARY_PATH=<syslibDir>:<nativeLibraryDir>` (so proot finds its
+`TMPDIR=/tmp`, `PROOT_LOADER=<nativeLibraryDir>/libproot-loader.so` (required, see
+below), `LD_LIBRARY_PATH=<syslibDir>:<nativeLibraryDir>` (so proot finds its
 libraries), `PROOT_TMP_DIR` in app storage.
 
 Android 10+ blocks exec() of files in writable app storage, so every native executable
 is packaged inside the APK as a `jniLibs/lib*.so` file; the OS extracts them to the
 read-only `nativeLibraryDir` from which execution is allowed.
+
+## proot's ELF loader (required — the alpha.2/alpha.3 root cause)
+
+Termux builds proot with `PROOT_UNBUNDLE_LOADER` (see termux-packages
+`packages/proot/build.sh`): the tracer does **not** embed its loader. For every guest
+execve, proot rewrites the syscall to execute a separate static helper — the ELF
+loader — which maps the guest binary and its interpreter using host paths proot
+prepared (`src/execve/enter.c`, `get_loader_path()`:
+
+```c
+return getenv("PROOT_LOADER") ?: PROOT_UNBUNDLE_LOADER "/loader";
+```
+
+The Termux build sets `PROOT_UNBUNDLE_LOADER=/data/data/com.termux/files/usr/libexec/proot`,
+so without `PROOT_LOADER` set, proot tries to exec **Termux's** loader path — which on
+a Linuxify install is either absent (`ENOENT` — the alpha.2 on-device failure
+`execve("/usr/bin/bash"): No such file or directory`) or belongs to a foreign app uid
+(`EACCES` — the alpha.3 failure `execve("/usr/bin/uname"): Permission denied`; the
+guest path in proot's message is cosmetic, the failing execve is the loader).
+
+Linuxify therefore:
+
+1. ships the loader from the **same pinned proot debs** as `jniLibs/libproot-loader.so`
+   (arm64: 18,136 B, x86_64: 18,368 B; static EXEC ELF, no `DT_NEEDED`, 16 KB-aligned;
+   digests pinned in `runtime-binaries.json`), and
+2. sets `PROOT_LOADER=<nativeLibraryDir>/libproot-loader.so` in every proot
+   environment (`LinuxRuntime.buildEnv()`), and
+3. gates the install (`RootfsInstaller`) and the preflight (`preflightProot()`) on the
+   loader being present and executable — a broken packaging fails fast, before any
+   rootfs download.
 
 ## Native dependency resolution (self-healing)
 

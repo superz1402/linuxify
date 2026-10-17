@@ -80,8 +80,7 @@ object RootfsIntegrity {
         val problems = mutableListOf<String>()
         if (!rootfs.isDirectory) return listOf("rootfs directory missing: $rootfs")
         for (p in criticalPaths(abi)) {
-            val f = File(rootfs, p)
-            if (!resolvesInsideRootfs(rootfs, f)) {
+            if (resolveToReal(rootfs, File(rootfs, p)) == null) {
                 problems.add(p)
             }
         }
@@ -89,12 +88,12 @@ object RootfsIntegrity {
     }
 
     /**
-     * True when [f] (possibly a symlink, possibly behind symlinks) resolves to
-     * an existing path inside the rootfs. Resolution is purely rootfs-relative:
-     * absolute link targets are joined to the rootfs, `..` segments are
-     * normalized, and any resolution escaping the rootfs counts as broken.
+     * Resolve [f]'s symlink chain (rootfs-relative, bounded) down to the real
+     * file/directory inside [rootfs], or null when the chain is broken, loops,
+     * or escapes the rootfs. This is the single source of truth for "does this
+     * guest path exist on disk right now".
      */
-    fun resolvesInsideRootfs(rootfs: File, f: File): Boolean {
+    fun resolveToReal(rootfs: File, f: File): File? {
         val rootPath = rootfs.canonicalFile.path
         var current = f
         // bound the walk: real chains are short, and loops mean broken anyway
@@ -104,17 +103,25 @@ object RootfsIntegrity {
                 val targetText = try {
                     Files.readSymbolicLink(current.toPath()).toString()
                 } catch (_: Exception) {
-                    return false
+                    return null
                 }
-                current = resolveLinkTarget(rootfs, current, targetText) ?: return false
+                current = resolveLinkTarget(rootfs, current, targetText) ?: return null
             } else {
                 break
             }
         }
         val canonical = current.canonicalFile
-        if (!canonical.path.startsWith(rootPath)) return false
-        return canonical.exists()
+        if (!canonical.path.startsWith(rootPath)) return null
+        return if (canonical.exists()) canonical else null
     }
+
+    /**
+     * True when [f] (possibly a symlink, possibly behind symlinks) resolves to
+     * an existing path inside the rootfs. Resolution is purely rootfs-relative:
+     * absolute link targets are joined to the rootfs, `..` segments are
+     * normalized, and any resolution escaping the rootfs counts as broken.
+     */
+    fun resolvesInsideRootfs(rootfs: File, f: File): Boolean = resolveToReal(rootfs, f) != null
 
     private fun resolveLinkTarget(rootfs: File, link: File, targetText: String): File? {
         val rootPath = rootfs.canonicalFile.path
@@ -133,6 +140,109 @@ object RootfsIntegrity {
             }
         }
         return File(rootfs, stack.joinToString("/"))
+    }
+
+    /**
+     * Apply a tar entry's mode bits to a file or directory (POSIX rwx only —
+     * setuid/setgid/sticky are deliberately dropped: meaningless under proot's
+     * fake root and one less hazard). Owner read (and write for files) is
+     * forced as a floor so the installer can always re-read and repair.
+     *
+     * Pure JVM — works identically on the host JVM (unit tests) and on Android
+     * (java.nio.file.Files is API 26+, minSdk is 26).
+     */
+    fun applyTarMode(target: File, mode: Int, directory: Boolean = false) {
+        try {
+            var m = mode and 0b111_111_111
+            if (directory) {
+                m = m or 0b111_000_000 // owner rwx floor for directories
+            } else {
+                m = m or 0b110_000_000 // owner rw floor for files
+            }
+            val text = buildString {
+                for (shift in intArrayOf(6, 3, 0)) {
+                    val tri = (m shr shift) and 0b111
+                    append(if (tri and 4 != 0) "r" else "-")
+                    append(if (tri and 2 != 0) "w" else "-")
+                    append(if (tri and 1 != 0) "x" else "-")
+                }
+            }
+            Files.setPosixFilePermissions(target.toPath(), java.nio.file.attribute.PosixFilePermissions.fromString(text))
+        } catch (_: Exception) {
+            // filesystem refused POSIX perms — keep the minimal exec semantics
+            if (mode and 0b001_001_001 != 0) target.setExecutable(true, false)
+        }
+    }
+
+    /** True when the file starts with the ELF magic (\x7fELF). */
+    fun isElf(f: File): Boolean = try {
+        java.io.RandomAccessFile(f, "r").use { raf ->
+            val magic = ByteArray(4)
+            raf.readFully(magic)
+            magic[0] == 0x7f.toByte() &&
+                magic[1] == 'E'.code.toByte() &&
+                magic[2] == 'L'.code.toByte() &&
+                magic[3] == 'F'.code.toByte()
+        }
+    } catch (_: Exception) {
+        false
+    }
+
+    /**
+     * Guarantee the exec bit on every exec-critical real file and on every ELF
+     * under the bin directories.
+     *
+     * proot's loader must mmap+execute the guest binaries and their ELF
+     * interpreter; a missing +x on any of them surfaces only later as an
+     * opaque `execve(...): Permission denied` from proot. Extraction, repair
+     * copies, and some device filesystems can drop mode bits — this sweep is
+     * the self-heal that keeps such failures invisible to the user.
+     *
+     * Only real files (symlink chains resolved) are touched; non-ELF data files
+     * under bin dirs are left alone unless they are exec-critical paths.
+     *
+     * @return the number of files repaired.
+     */
+    fun ensureExecutableBits(rootfs: File, abi: String, onLog: ((String) -> Unit)? = null): Int {
+        if (!rootfs.isDirectory) return 0
+        var fixed = 0
+        val seen = HashSet<String>()
+
+        fun repair(real: File, label: String) {
+            if (!seen.add(real.absolutePath)) return
+            try {
+                val perms = java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x")
+                Files.setPosixFilePermissions(real.toPath(), perms)
+                fixed++
+                onLog?.invoke("exec bit restored on $label")
+            } catch (_: Exception) {
+                if (real.setExecutable(true, false)) {
+                    fixed++
+                    onLog?.invoke("exec bit restored on $label")
+                }
+            }
+        }
+
+        // 1. every exec-critical path that resolves to a real file must be +x
+        //    (only when being executable is actually required: ELF files and
+        //    anything under the bin dirs — resolv.conf/os-release stay untouched)
+        val binPrefixes = listOf("bin/", "sbin/", "usr/bin/", "usr/sbin/")
+        for (p in criticalPaths(abi)) {
+            val real = resolveToReal(rootfs, File(rootfs, p)) ?: continue
+            val execRequired = isElf(real) || binPrefixes.any { p == it.trimEnd('/') || p.startsWith(it) }
+            if (real.isFile && !real.canExecute() && execRequired) repair(real, p)
+        }
+
+        // 2. every ELF under the bin directories must be +x
+        for (dirRel in listOf("bin", "sbin", "usr/bin", "usr/sbin")) {
+            val dir = resolveToReal(rootfs, File(rootfs, dirRel)) ?: continue
+            if (!dir.isDirectory) continue
+            for (child in dir.listFiles() ?: continue) {
+                if (!child.isFile || child.canExecute()) continue
+                if (isElf(child)) repair(child, "$dirRel/${child.name}")
+            }
+        }
+        return fixed
     }
 
     /**
@@ -194,6 +304,7 @@ object RootfsIntegrity {
                         when {
                             entry.isDirectory -> {
                                 if (!target.isDirectory && !target.mkdirs() && !target.isDirectory) return false
+                                applyTarMode(target, entry.mode, directory = true)
                             }
                             entry.isSymbolicLink -> {
                                 if (extractor.resolveLinkInsideRootfs(rel, entry.linkName) == null) continue
@@ -209,10 +320,13 @@ object RootfsIntegrity {
                             entry.isFile -> {
                                 target.parentFile?.mkdirs()
                                 if (target.isDirectory) continue
+                                // a re-extract must be able to replace a possibly
+                                // read-only leftover from a previous attempt
+                                if (target.exists()) target.delete()
                                 target.outputStream().use { out ->
                                     tar.copyTo(out)
                                 }
-                                if (entry.mode and 0b001001001 != 0) target.setExecutable(true, false)
+                                applyTarMode(target, entry.mode)
                                 repaired++
                             }
                             entry.isLink -> {
@@ -222,7 +336,9 @@ object RootfsIntegrity {
                                 val src = File(rootfs, srcRel)
                                 target.parentFile?.mkdirs()
                                 if (src.isFile) {
+                                    if (target.exists()) target.delete()
                                     src.copyTo(target, overwrite = true)
+                                    applyTarMode(target, entry.mode)
                                     repaired++
                                 }
                             }

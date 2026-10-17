@@ -95,6 +95,52 @@ class SafeTarExtractorTest {
     }
 
     // ------------------------------------------------------------------
+    // Regression tests for the on-device v0.1.0-alpha.3 exec failure
+    // (proot error: execve(...): Permission denied): mode bits must be
+    // preserved with full tar fidelity, including through the copy paths
+    // (hardlinks, symlink fallbacks) that File.copyTo() lands at 0660.
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `non-executable files keep their non-executable bits`() {
+        val dest = tmp.newFolder()
+        val data = "1.2.3\n".toByteArray()
+        val bytes = tarOf { tos ->
+            val f = TarArchiveEntry("etc/hosts")
+            f.size = data.size.toLong()
+            f.mode = 0b110100100 // 0644: no exec bit anywhere
+            tos.putArchiveEntry(f); tos.write(data); tos.closeArchiveEntry()
+        }
+        SafeTarExtractor(dest).extract(bytes.inputStream())
+        val out = File(dest, "etc/hosts")
+        assertTrue(out.isFile)
+        assertFalse("0644 file must not gain +x", out.canExecute())
+        assertTrue("0644 file must stay readable", out.canRead())
+    }
+
+    @Test
+    fun `hardlink copy lands executable like its tar mode`() {
+        val dest = tmp.newFolder()
+        val data = "perl-binary".toByteArray()
+        val bytes = tarOf { tos ->
+            val hl = TarArchiveEntry("usr/bin/perl5.38.2", TarArchiveEntry.LF_LINK)
+            hl.linkName = "usr/bin/perl"
+            hl.mode = 0b111101101
+            tos.putArchiveEntry(hl); tos.closeArchiveEntry()
+            val src = TarArchiveEntry("usr/bin/perl")
+            src.size = data.size.toLong(); src.mode = 0b111101101
+            tos.putArchiveEntry(src); tos.write(data); tos.closeArchiveEntry()
+        }
+        SafeTarExtractor(dest).extract(bytes.inputStream())
+        val copy = File(dest, "usr/bin/perl5.38.2")
+        assertTrue(copy.isFile)
+        assertTrue(
+            "hardlink copy must be executable (File.copyTo alone lands 0660)",
+            copy.canExecute(),
+        )
+    }
+
+    // ------------------------------------------------------------------
     // Regression tests for the on-device v0.1.0-alpha.2 install failure:
     // SafeTarExtractor silently dropped every symlink whose target contained
     // ".." — including the ELF loader chain — so proot failed every guest exec

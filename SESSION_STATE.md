@@ -1,24 +1,34 @@
 # SESSION_STATE.md — Linuxify Android
 
-Concise handoff for the next agent session. Current as of 2026-10-17 (Task 7 complete — second device-reported bug fixed, auto self-setup, stable signing; v0.1.0-alpha.3).
+Concise handoff for the next agent session. Current as of 2026-10-17 (Task 8 complete — third device-reported bug fixed: proot's un-bundled ELF loader; v0.1.0-alpha.4).
 
 ## Repository & branch
 
 - Canonical repo: https://github.com/superz1402/linuxify — branch `main`
 - Latest verified remote commit: see `git ls-remote origin main`
 - Releases:
-  - v0.1.0-alpha.3 (current) — install self-heals; targetSdk 28; stable signing (no more uninstall-per-update); assets: linuxify-0.1.0-alpha.3-release.apk + -debug.apk
+  - v0.1.0-alpha.4 (current) — SHIPS proot's ELF loader (libproot-loader.so) + PROOT_LOADER env; full tar-mode fidelity + exec-bit self-heal; same stable signing; assets: linuxify-0.1.0-alpha.4-release.apk + -debug.apk
+  - v0.1.0-alpha.3 (superseded; missing loader → device exec failures)
   - v0.1.0-alpha.2 (superseded; had the SafeTarExtractor `..`-symlink drop found on device)
   - v0.1.0-alpha.1 (superseded; had the jniLibs DT_NEEDED bug found on device)
 
 ## Status of issues
 
 - CLOSED with evidence: #1 #2 #4 #5 #6 #7 #8 #9 #11 (prior sessions)
-- OPEN: #3 (on-device verification) — two device drills so far each surfaced one real
-  bug (talloc linker mismatch -> fixed alpha.2; `..`-symlink drop breaking the ELF
-  loader chain -> fixed alpha.3). Re-run the device drill with alpha.3: install should
-  complete with ZERO errors (integrity verify + auto-repair + layered exec probes all
-  run automatically), then close #3.
+- OPEN: #3 (on-device verification) — three device drills so far each surfaced one real
+  bug (talloc linker mismatch -> alpha.2; `..`-symlink drop -> alpha.3; proot's
+  UNBUNDLED loader missing → execve ENOENT/EACCES -> alpha.4). Re-run the device drill
+  with alpha.4: install should complete with ZERO errors (loader gate + integrity
+  verify + auto-repair + exec-bit sweep + layered exec probes all run automatically),
+  then close #3.
+
+## THE loader rule (learned in alpha.4 — do not regress)
+
+- Termux proot is built with PROOT_UNBUNDLE_LOADER: every guest execve is rewritten to
+  exec the SEPARATE static loader binary. Linuxify must (a) ship it as
+  jniLibs/libproot-loader.so and (b) set PROOT_LOADER in LinuxRuntime.buildEnv(). Both
+  are in place and unit-drilled; the install gate fails fast if the loader is missing.
+  Details: docs/RUNTIME.md "proot's ELF loader".
 
 ## Signing (changed in alpha.3)
 

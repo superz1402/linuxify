@@ -5,11 +5,12 @@
     "why": "Android jniLibs only extracts files named lib*.so, so versioned DT_NEEDED names (libtalloc.so.2, libandroid-shmem.so) can never be satisfied from nativeLibraryDir. The proot binary's DT_NEEDED strings are rewritten in place to the packaged names.",
     "tool": "tools/patch_elf_needed.py",
     "transform": "DT_NEEDED libtalloc.so.2 -> libtalloc.so; DT_NEEDED libandroid-shmem.so -> libshmem.so (shorter strings, NUL-padded in place; no ELF structure change)",
-    "elf_alignment_check": "PT_LOAD p_align = 0x4000 (16 KB) on all bundled binaries — 16 KB page-size devices supported",
+    "elf_alignment_check": "PT_LOAD p_align = 0x4000 (16 KB) on all bundled binaries \u2014 16 KB page-size devices supported",
     "sha256_patched": {
       "arm64-v8a/libproot.so": "b0d1f3f261dbb57dc4cad5c908c71914afd1fc0e5ad6fd7d2b92daab9e1316fd",
       "x86_64/libproot.so": "1ce2d86c700ebdc388f1b544d101ef375ca171d92f2483252756e60ee37a5cab"
-    }
+    },
+    "note": "alpha.4 addendum: libproot-loader.so added for both ABIs (extracted from the SAME pinned proot debs). The loader needs no DT_NEEDED patching (static EXEC ELF). Fixes the on-device exec failures: proot (PROOT_UNBUNDLE_LOADER build) rewrites every guest execve to its loader; without PROOT_LOADER it fell back to /data/data/com.termux/files/usr/libexec/proot/loader \u2014 absent (ENOENT, alpha.2) or foreign-uid (EACCES, alpha.3)."
   },
   "binaries": [
     {
@@ -20,6 +21,16 @@
       "size": 247488,
       "sha256_extracted": "1545b85b312505db6eb6908ff8b2ded0a77a3bd689c50ae85aa7c1d8445dd717",
       "sha256_deb": "8199dca06dccb693ec09fb1759e3e1ad08b4863f0c11c612f89c20bd9ecdc1a0"
+    },
+    {
+      "deb": "proot_arm64.deb",
+      "abi": "arm64-v8a",
+      "source": "data/data/com.termux/files/usr/libexec/proot/loader",
+      "packaged_as": "libproot-loader.so",
+      "size": 18136,
+      "sha256_extracted": "cbdef0e652c2b78af25d867e1719fdebbb0915e25aae2dd35b3b5c1835f6b551",
+      "sha256_deb": "8199dca06dccb693ec09fb1759e3e1ad08b4863f0c11c612f89c20bd9ecdc1a0",
+      "note": "proot ELF loader. Termux builds proot with PROOT_UNBUNDLE_LOADER: the tracer rewrites every guest execve to exec this static binary (see src/execve/enter.c get_loader_path). Static EXEC ELF, no DT_NEEDED, PT_LOAD align 0x4000. LinuxRuntime.buildEnv() sets PROOT_LOADER to it. Its absence was the root cause of the alpha.2 (ENOENT) and alpha.3 (EACCES via Termux's foreign-uid path) on-device exec failures."
     },
     {
       "deb": "libtalloc_arm64.deb",
@@ -47,6 +58,16 @@
       "size": 263784,
       "sha256_extracted": "9a1303a51e69b89d78beaf40e4ec829c5c2ca98cbd5672411bdb15eebd871316",
       "sha256_deb": "77ea45540071ca543adda2b51aca2bc3761c52904d013fd0890682288eff9455"
+    },
+    {
+      "deb": "proot_x64.deb",
+      "abi": "x86_64",
+      "source": "data/data/com.termux/files/usr/libexec/proot/loader",
+      "packaged_as": "libproot-loader.so",
+      "size": 18368,
+      "sha256_extracted": "a836b0569c84b1661333d16bacf6b396ff08fea816a5c936a82e08ddeeca8341",
+      "sha256_deb": "77ea45540071ca543adda2b51aca2bc3761c52904d013fd0890682288eff9455",
+      "note": "proot ELF loader. Termux builds proot with PROOT_UNBUNDLE_LOADER: the tracer rewrites every guest execve to exec this static binary (see src/execve/enter.c get_loader_path). Static EXEC ELF, no DT_NEEDED, PT_LOAD align 0x4000. LinuxRuntime.buildEnv() sets PROOT_LOADER to it. Its absence was the root cause of the alpha.2 (ENOENT) and alpha.3 (EACCES via Termux's foreign-uid path) on-device exec failures."
     },
     {
       "deb": "libtalloc_x64.deb",

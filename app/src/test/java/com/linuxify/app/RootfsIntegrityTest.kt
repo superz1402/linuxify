@@ -177,4 +177,60 @@ class RootfsIntegrityTest {
         val audit = RootfsIntegrity.auditBrokenLinks(root)
         assertTrue("absolute target must resolve through rootfs-relative /lib", audit.isEmpty())
     }
+
+    // ------------------------------------------------------------------
+    // Regression tests for the v0.1.0-alpha.3 on-device exec failure:
+    // proot's loader must mmap+exec guest ELFs, so a dropped +x surfaces as
+    // `execve(...): Permission denied`. ensureExecutableBits is the self-heal.
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `ensureExecutableBits repairs non-executable ELF in bin dir`() {
+        val root = tmp.newFolder()
+        File(root, "usr/bin").mkdirs()
+        val tool = File(root, "usr/bin/uname")
+        // ELF magic so isElf() matches, then break the mode to the broken state
+        tool.writeBytes(byteArrayOf(0x7f) + "ELF".toByteArray() + ByteArray(8))
+        RootfsIntegrity.applyTarMode(tool, 0b110100100) // 0644
+
+        assertFalse(tool.canExecute())
+        val fixed = RootfsIntegrity.ensureExecutableBits(root, "arm64-v8a")
+        assertTrue("at least the ELF in usr/bin must be fixed", fixed >= 1)
+        assertTrue("ELF must be executable after the sweep", tool.canExecute())
+    }
+
+    @Test
+    fun `ensureExecutableBits repairs loader behind symlink chain`() {
+        val root = tmp.newFolder()
+        File(root, "usr/bin").mkdirs()
+        File(root, "usr/lib/aarch64-linux-gnu").mkdirs()
+        Files.createSymbolicLink(File(root, "lib").toPath(), java.nio.file.Path.of("usr/lib"))
+        val loader = File(root, "usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1")
+        loader.writeBytes(byteArrayOf(0x7f) + "ELF".toByteArray() + ByteArray(8))
+        RootfsIntegrity.applyTarMode(loader, 0b110_100_100) // 0644 — broken state
+        // critical path lib/ld-linux-aarch64.so.1 resolves through the lib symlink
+        Files.createSymbolicLink(
+            File(root, "usr/lib/ld-linux-aarch64.so.1").toPath(),
+            java.nio.file.Path.of("aarch64-linux-gnu/ld-linux-aarch64.so.1"),
+        )
+
+        val fixed = RootfsIntegrity.ensureExecutableBits(root, "arm64-v8a")
+        assertTrue("loader behind the chain must be fixed", fixed >= 1)
+        assertTrue(loader.canExecute())
+    }
+
+    @Test
+    fun `ensureExecutableBits leaves data files and text configs alone`() {
+        val root = tmp.newFolder()
+        File(root, "etc").mkdirs()
+        File(root, "etc/resolv.conf").writeText("nameserver 8.8.8.8\n")
+        File(root, "etc/os-release").writeText("ID=ubuntu\n")
+        File(root, "usr/bin").mkdirs()
+        File(root, "usr/bin/README.txt").writeText("not an elf")
+
+        RootfsIntegrity.ensureExecutableBits(root, "arm64-v8a")
+        assertFalse("resolv.conf must not gain +x", File(root, "etc/resolv.conf").canExecute())
+        assertFalse("os-release must not gain +x", File(root, "etc/os-release").canExecute())
+        assertFalse("non-ELF in bin must not gain +x", File(root, "usr/bin/README.txt").canExecute())
+    }
 }

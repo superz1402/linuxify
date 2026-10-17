@@ -51,6 +51,13 @@ class LinuxRuntime(private val ctx: Context) {
     /**
      * Environment passed to proot and the guest processes.
      *
+     *  - PROOT_LOADER is REQUIRED: Termux builds proot with
+     *    PROOT_UNBUNDLE_LOADER, so the tracer rewrites every guest execve to
+     *    exec the separate ELF loader binary. Without this variable proot
+     *    falls back to the hardcoded Termux path, which is absent (ENOENT) or
+     *    belongs to a foreign app uid (EACCES) on Linuxify — the exact
+     *    mechanism behind the alpha.2/alpha.3 on-device exec failures.
+     *
      * LD_LIBRARY_PATH puts the private syslib shim directory (symlinks named
      * like the exact sonames the bionic linker requests) ahead of the packaged
      * native lib dir, so self-healed dependency names resolve on every spawn.
@@ -61,6 +68,7 @@ class LinuxRuntime(private val ctx: Context) {
         "TERM" to "xterm-256color",
         "LANG" to "C.UTF-8",
         "TMPDIR" to "/tmp",
+        "PROOT_LOADER" to RuntimeDirs.prootLoaderBinary(ctx).absolutePath,
         "LD_LIBRARY_PATH" to listOf(
             RuntimeDirs.syslibDir(ctx).absolutePath,
             RuntimeDirs.nativeLibDir(ctx).absolutePath,
@@ -91,6 +99,19 @@ class LinuxRuntime(private val ctx: Context) {
         if (!proot.exists()) {
             return Result.failure(RuntimeError.ProotMissing("libproot.so not found in nativeLibraryDir"))
         }
+        // The loader is not optional: Termux-built proot rewrites every guest
+        // execve to exec this binary. Catch a missing loader BEFORE the rootfs
+        // download instead of after it, as a confusing guest exec error.
+        val loader = RuntimeDirs.prootLoaderBinary(ctx)
+        if (!loader.exists() || !loader.canExecute()) {
+            return Result.failure(
+                RuntimeError.ProotMissing(
+                    "libproot-loader.so missing or not executable in nativeLibraryDir " +
+                        "(proot cannot start guest programs without its ELF loader)",
+                ),
+            )
+        }
+        onLog?.invoke("proot loader available (${loader.name})")
         val libDir = RuntimeDirs.nativeLibDir(ctx)
         val syslib = RuntimeDirs.syslibDir(ctx)
         var lastOutput = ""

@@ -92,6 +92,14 @@ class RootfsInstaller(private val ctx: Context) {
             if (!RuntimeDirs.prootAvailable(ctx)) {
                 throw RuntimeError.ProotMissing("libproot.so not found in nativeLibraryDir")
             }
+            if (!RuntimeDirs.prootLoaderAvailable(ctx)) {
+                // Fail here, before any download: without the ELF loader proot
+                // cannot start guest programs at all (it execs the loader in
+                // place of every guest binary).
+                throw RuntimeError.ProotMissing(
+                    "libproot-loader.so not found or not executable in nativeLibraryDir",
+                )
+            }
 
             // Native dependency preflight BEFORE downloading anything: proves the
             // packaged proot actually links and runs on this device, and self-heals
@@ -192,6 +200,12 @@ class RootfsInstaller(private val ctx: Context) {
                 appendLog("integrity ok (${RootfsIntegrity.criticalPaths(artifact.abi).size} critical paths + full link audit)")
             }
 
+            // Exec-bit self-heal BEFORE the first probe: filesystems and copy
+            // paths can drop mode bits, and the loader must be able to map and
+            // exec the guest binaries. Fixing this here keeps errors invisible.
+            val fixedBits = RootfsIntegrity.ensureExecutableBits(rootfs, artifact.abi) { appendLog(it) }
+            if (fixedBits > 0) appendLog("exec permissions restored on $fixedBits file(s)")
+
             appendLog("verifying command execution…")
             val runtime = LinuxRuntime(ctx)
             verifyExec(runtime, artifact, archive)
@@ -260,13 +274,83 @@ class RootfsInstaller(private val ctx: Context) {
             } else {
                 appendLog("integrity clean — failure is at exec level, trying next fallback")
             }
+            // Second self-heal axis: mode bits. Some filesystems/copy paths can
+            // leave exec-critical files without +x; fix and retry this attempt.
+            val fixed = RootfsIntegrity.ensureExecutableBits(RuntimeDirs.rootfsDir(ctx), artifact.abi) { appendLog(it) }
+            if (fixed > 0) {
+                appendLog("exec permissions restored on $fixed file(s) — retrying ${attempt.label}")
+                res = attempt.run()
+                if (passed(res)) {
+                    appendLog("verification ok via ${attempt.label} after exec-bit repair")
+                    return
+                }
+            }
             last = res
         }
         val r = last
         throw RuntimeError.Verification(
             "all ${attempts.size} exec probes failed (bash, sh, direct uname). " +
-                "last: rc=${r?.exitCode} out=${r?.stdout?.take(200)} err=${r?.stderr?.take(300)}",
+                "last: rc=${r?.exitCode} out=${r?.stdout?.take(200)} err=${r?.stderr?.take(300)}. " +
+                execDiagnostics(),
         )
+    }
+
+    /**
+     * Facts, not guesses, for the final verification error:
+     *  - mode/size of the probe binary and the ELF loader as they are on disk
+     *  - a DIRECT host execve of the probe binary (no proot). The kernel checks
+     *    exec permission BEFORE parsing the ELF, so the errno discriminates:
+     *      EACCES  -> filesystem/SELinux denies exec of app-private files;
+     *      ENOENT  -> permission checks PASSED (the error comes from the guest
+     *                 ELF interpreter path, expected outside proot) — meaning
+     *                 the failure was proot-pipeline specific, not permissions.
+     */
+    private fun execDiagnostics(): String {
+        val rootfs = RuntimeDirs.rootfsDir(ctx)
+        val uname = File(rootfs, "usr/bin/uname")
+        val loader = RuntimeDirs.prootLoaderBinary(ctx)
+        fun statLine(f: File): String =
+            if (!f.exists()) "${f.name}: ABSENT"
+            else "${f.name}: mode=%o size=%d".format(octalMode(f), f.length())
+        val direct = if (uname.isFile) {
+            try {
+                val p = ProcessBuilder(uname.absolutePath).start()
+                val finished = p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+                p.destroy()
+                if (finished) {
+                    "direct execve ok (rc=${p.exitValue()}) — permissions allow exec; failure was proot-pipeline specific"
+                } else {
+                    "direct execve timed out"
+                }
+            } catch (e: Exception) {
+                val msg = e.message ?: ""
+                when {
+                    "error=13" in msg || "Permission denied" in msg ->
+                        "direct execve: Permission denied — filesystem/SELinux denies exec of app-private files on this device (independent of proot)"
+                    "error=2" in msg || "No such file" in msg ->
+                        "direct execve reached ELF parsing (ENOENT on the guest interpreter is expected without proot) — exec permissions are fine; failure was proot-pipeline specific"
+                    else -> "direct execve failed: ${msg.take(120)}"
+                }
+            }
+        } else {
+            "direct execve not attempted: uname absent"
+        }
+        return "diagnostics: ${statLine(uname)}; ${statLine(loader)}; $direct"
+    }
+
+    private fun octalMode(f: File): Int = try {
+        val perms = java.nio.file.Files.getPosixFilePermissions(f.toPath())
+        var m = 0
+        if (java.nio.file.attribute.PosixFilePermission.OWNER_READ in perms) m = m or 0b100_000_000
+        if (java.nio.file.attribute.PosixFilePermission.OWNER_WRITE in perms) m = m or 0b010_000_000
+        if (java.nio.file.attribute.PosixFilePermission.OWNER_EXECUTE in perms) m = m or 0b001_000_000
+        if (java.nio.file.attribute.PosixFilePermission.GROUP_READ in perms) m = m or 0b000_100_000
+        if (java.nio.file.attribute.PosixFilePermission.GROUP_EXECUTE in perms) m = m or 0b000_001_000
+        if (java.nio.file.attribute.PosixFilePermission.OTHERS_READ in perms) m = m or 0b000_000_100
+        if (java.nio.file.attribute.PosixFilePermission.OTHERS_EXECUTE in perms) m = m or 0b000_000_001
+        m
+    } catch (_: Exception) {
+        0
     }
 
     private fun passed(res: LinuxRuntime.ExecResult): Boolean {

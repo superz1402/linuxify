@@ -312,3 +312,70 @@ Toolchain (Issue #1):
     persistence drill) is the user's next step and closes issue #3.
 - Artifacts: linuxify-0.1.0-alpha.3-release.apk / linuxify-0.1.0-alpha.3-debug.apk
   (GitHub release v0.1.0-alpha.3 + build outputs).
+
+### Task 8 — fix third on-device install failure (execve EACCES): proot's un-bundled ELF loader (v0.1.0-alpha.4)
+- Status: DONE (build verification + REAL host runtime drill complete; on-device confirmation pending with user)
+- Date: 2026-10-17
+- Trigger: user's third real device drill — all 3 exec probes failed:
+  `proot error: execve("/usr/bin/uname"): Permission denied` while
+  `integrity clean - failure is at exec level` (rootfs contents verified fine).
+- Root cause (EVIDENCE-BASED, from the pinned proot binary + upstream source, not guessed):
+  - Termux builds proot with `PROOT_UNBUNDLE_LOADER=$PREFIX/libexec/proot` — the tracer
+    does NOT embed its loader. `src/execve/enter.c get_loader_path()`:
+    `getenv("PROOT_LOADER") ?: PROOT_UNBUNDLE_LOADER "/loader"`. proot rewrites EVERY
+    guest execve to exec that loader (static helper that maps the guest ELF + interpreter).
+  - Linuxify never set PROOT_LOADER and never shipped the loader → proot fell back to the
+    hardcoded `/data/data/com.termux/files/usr/libexec/proot/loader`:
+    - alpha.2 device run: path ABSENT (no Termux) → kernel execve ENOENT, reported as
+      `execve("/usr/bin/bash"): No such file or directory` (guest path in the message is cosmetic);
+    - alpha.3 device run: Termux present on the device → path exists but is inside a
+      FOREIGN app's 0700 data dir → kernel execve EACCES, reported as
+      `execve("/usr/bin/uname"): Permission denied`.
+    One root cause explains both runs and the ENOENT→EACCES flip.
+  - Proof chain: strings of the packaged libproot.so (PROOT_LOADER, the Termux path,
+    `'the loader was not found or doesn't work'` hint) + upstream termux/proot source +
+    termux-packages build.sh (`export PROOT_UNBUNDLE_LOADER=...`).
+- Fixes:
+  - Packaged the loader from the SAME pinned proot debs (sha256-verified) as
+    `jniLibs/libproot-loader.so` for both ABIs (arm64 18,136 B
+    `cbdef0e6…`, x86_64 18,368 B `a836b056…`; static EXEC ELF, no DT_NEEDED → no patching;
+    PT_LOAD align 0x4000). Provenance recorded in runtime-binaries.json.
+  - `LinuxRuntime.buildEnv()` now sets `PROOT_LOADER=<nativeLibraryDir>/libproot-loader.so`
+    (covers boundedExec, execInRootfs, PTY shell via PtyTerminal).
+  - Install gate + preflightProot fail fast when the loader is missing/non-executable —
+    BEFORE any rootfs download.
+  - Mode-fidelity hardening (defense in depth for the EACCES family):
+    SafeTarExtractor now applies FULL tar mode bits to files AND directories
+    (RootfsIntegrity.applyTarMode, POSIX rwx; owner rw floor for files, rwx floor for
+    dirs); the permission-losing copy paths were fixed (hardlink second pass and symlink
+    fallback previously landed 0660 — hardlinked executables like perl5.38.2/uncompress
+    would have been unexecuable); RootfsIntegrity.repair deletes read-only leftovers and
+    applies full modes.
+  - NEW exec-bit self-heal: `RootfsIntegrity.ensureExecutableBits()` guarantees +x on
+    exec-critical real files (symlink chains resolved) and every ELF under bin dirs —
+    runs BEFORE the first probe and again in the probe failure path (repair → retry).
+    Data/config files (resolv.conf, os-release) are deliberately untouched.
+  - Honest diagnostics when all probes still fail: mode/size of uname + loader on disk,
+    plus a DIRECT host execve discriminator (EACCES → filesystem/SELinux denial
+    independent of proot; ENOENT → permissions fine, proot-pipeline specific).
+- Verification (honest labels):
+  - Unit tests: 37/37 PASS (32 prior + 5 new: non-exec stays non-exec, hardlink copy
+    executable, exec-bit sweep fixes ELF in bin / loader behind symlink chain, sweep
+    leaves text configs alone).
+  - REAL host runtime drill (repo's actual extractor + proot 5.3.0 + pinned amd64
+    artifact): 3,416 entries extracted, 0 skipped; mode fidelity confirmed (uname/bash/
+    perl-hardlink exec, etc/hosts not); integrity 0 problems; ensureExecutableBits 0 on
+    fresh extract (no false positives); bash -lc uname → Linux + LINUXIFY_OK; direct
+    argv exec ok; file created; PERSISTENCE_OK across proot exit+relaunch; dash + hardlinked
+    perl ok; SELF-HEAL drill: breaking +x on uname + loader real file → sweep repaired
+    exactly those 2 → guest exec ok again. Script: scripts/host_drill.sh (server).
+  - Build: assembleDebug + assembleRelease BUILD SUCCESSFUL (Temurin JDK 21.0.12.1,
+    SDK 35, restored from scratch per RECOVERY). release APK 12,425,634 B
+    (sha256 20c6e83f…), debug APK 18,600,676 B (sha256 58c9774b…); apksigner: BOTH use
+    the stable alpha.3 identity (cert sha256 8f55e466…cca9) → alpha.4 installs OVER
+    alpha.3 WITHOUT uninstall; aapt: versionCode 4, targetSdk 28; in-APK loader digest
+    == pinned digest.
+  - On-device confirmation of alpha.4 (install with zero errors → PTY shell → persistence
+    drill) is the user's next step and closes issue #3.
+- Artifacts: linuxify-0.1.0-alpha.4-release.apk / linuxify-0.1.0-alpha.4-debug.apk
+  (GitHub release v0.1.0-alpha.4 + build outputs).
