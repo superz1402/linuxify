@@ -1,0 +1,43 @@
+# Linuxify (Android)
+
+**Linuxify** is a native Android application (Kotlin + Jetpack Compose) that turns an
+Android device into a practical, local Linux development workstation — no root, no Docker
+daemon, no Termux dependency, no remote server required.
+
+> This repository hosts the **native Android app** (`com.linuxify.app`). The original
+> Linuxify TypeScript CLI (Termux-based) lives at [Bilal140202/linuxify](https://github.com/Bilal140202/linuxify)
+> and remains the engineering reference for registry, doctor, and compatibility concepts.
+
+## What it does
+
+- Installs a real **Ubuntu Linux userspace** locally using **proot** (unrooted, app-private).
+- Provides a **real PTY-backed terminal** with ANSI colors, scrollback, and an extra-keys row.
+- Manages **packages** through the real APT inside the userspace.
+- Manages **projects** (Git clone, create, open in terminal).
+- Runs and supervises **local servers** (loopback by default; LAN only by explicit choice).
+- Keeps user files **persistent** across app restarts (until app uninstall / explicit reset).
+- Is **honest** about Android limitations: no kernel-level isolation, no privileged ports,
+  no guarantee that Android will keep background processes alive.
+
+## Status
+
+Early development. See [worklog.md](worklog.md), [SESSION_STATE.md](SESSION_STATE.md)
+and the GitHub issue tracker for verified progress. What is claimed where is strictly
+separated into: **build-verified**, **host-verified**, **device-verified** — anything not
+labeled is not verified.
+
+## Build
+
+See [docs/RECOVERY.md](docs/RECOVERY.md) for the exact reproducible toolchain setup, or:
+
+```bash
+./gradlew assembleDebug
+# APK: app/build/outputs/apk/debug/app-debug.apk
+```
+
+Requirements: JDK 17+ (21 tested), Android SDK platform 35, build-tools 35.0.0.
+
+## License
+
+GPL-3.0-or-later. Bundles GPLv3 components (Termux terminal-emulator/terminal-view,
+proot) with full attribution in `docs/RUNTIME.md` and `docs/SECURITY.md`.
