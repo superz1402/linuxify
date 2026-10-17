@@ -76,11 +76,16 @@ Companion files: `SESSION_STATE.md` (handoff), `docs/RECOVERY.md` (fresh-session
 ## Task history
 
 ### Task 1 — Establish durable control (Phase A)
-- Status: IN PROGRESS
+- Status: DONE
 - Date: 2026-10-17
 - Work: environment audit (above), created `superz1402/linuxify`, initialized local git,
   wrote worklog/SESSION_STATE/RECOVERY, created GitHub Issues for phase tasks, first
-  checkpoint push (pending verification below).
+  checkpoint pushed and verified.
+- Push verification: local HEAD == remote main == `05d77996b193644d5a15647dc9d4ac2cd31b57bb`
+  (verified via `git ls-remote origin main`).
+- Issues created: #1 toolchain(build), #2 runtime drill(host), #3 on-device verification
+  (blocked), #4 android skeleton, #5 runtime layer, #6 terminal, #7 UI research,
+  #8 UI screens, #9 tests, #10 release. Board: https://github.com/superz1402/linuxify/issues
 - Tests: N/A (infrastructure task). Verification = successful push + remote SHA check.
 
 ## Active work
