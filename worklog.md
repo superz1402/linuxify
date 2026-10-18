@@ -438,3 +438,21 @@ Work Log:
 Stage Summary:
 - Copy/Paste in the terminal now hit the real Android clipboard; empty-selection crash vector closed; dead "More…" removed.
 - Runtime-first checkpoint: build + unit + signature verification on server; the on-device clipboard drill (long-press -> Copy -> long-press -> Paste) is with the user's device.
+
+---
+Task ID: 14
+Agent: Z (main agent, continuation session)
+Task: User confirmed alpha.8 Copy/Paste works on device; requested a floating mini icon in the terminal that shares the whole terminal log to any app/AI.
+
+Work Log:
+- ENVIRONMENT EVENT: at turn start the local clone had ROLLED BACK to the pre-alpha.8 snapshot (HEAD=alpha.5 + stale draft; reflog had no trace of this session's work; JDK/SDK/download artifacts wiped). Remote GitHub was unaffected — commits c79c1a6/354ee6d, tag v0.1.0-alpha.8 and its release asset were already pushed. Recovery: hard-reset local to origin/main, reinstalled Temurin JDK 21.0.12.1+1 + Android SDK (platform-35/build-tools 35.0.0), re-downloaded the alpha.8 release APK into download/ (byte-identical 12,441,362 B). LESSON: origin/main is the only durable state; commit+push before turn end.
+- Verified vendored TerminalBuffer.getTranscriptText() exists (Termux's own transcript API) — scrollback + screen, colors stripped.
+- New TerminalLogShare (pure, JVM-testable): one-line factual header (environment + session label) so a bare paste into an AI chat carries context; 500k-char cap keeping the MOST RECENT tail with an explicit truncation notice (crashes live at the tail); at-cap is a no-op.
+- TerminalScreen: AndroidView wrapped in a Box; ShareLogButton (44 dp translucent circle, bottom-end, contentDescription set) -> shareTranscript(): captures transcript, builds payload, launches ACTION_SEND chooser; empty-transcript guard toasts; chooser launch failure reported non-fatally via CrashReporter.
+- ic_share.xml vector added (no new dependency).
+- 3 new unit tests: 48/48 pass. assembleDebug + assembleRelease clean; versionCode 9.
+- v0.1.0-alpha.9 (commit 1801d40, tag pushed, release id 416622078): release APK 12,444,530 B, cert SHA-256 8f55e466…cca9 verified; asset uploaded against the release id this time (alpha.8's silent-miss mistake not repeated); APKs in /home/z/my-project/download/.
+
+Stage Summary:
+- Shipped: two-tap share of the full terminal log to any chat/AI app via the system share sheet.
+- Honest split: payload logic device-verified by unit tests; the on-device share-sheet drill (tap icon -> paste into an app) is with the user.

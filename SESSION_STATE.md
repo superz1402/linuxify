@@ -72,3 +72,11 @@ Concise handoff for the next agent session. Current as of 2026-10-18 (Task 11 co
 - 16 KB page-size devices: CLEARED for currently pinned binaries (PT_LOAD p_align 0x4000
   verified; re-check whenever re-pinning — runtime-binaries.json post_process).
 - Release signing identity not provisioned (docs/BUILDING.md).
+
+## Environment rollback notice (learned 2026-10-18, Task 14)
+
+- The local build-server clone can silently revert to an older snapshot between
+  sessions (happened once: HEAD, working tree, JDK/SDK, download/ all rolled back;
+  reflog showed no trace). GitHub remote was unaffected.
+- Rule: treat origin/main as the ONLY durable state — commit, tag and push before
+  the session ends; rebuild env from docs/BUILDING.md + SESSION_STATE if missing.
