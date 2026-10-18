@@ -1,5 +1,6 @@
 package com.linuxify.app.ui.screens
 
+import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,11 +13,18 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.linuxify.app.runtime.CrashReportActivity
 import com.linuxify.app.runtime.LinuxRuntime
 import com.linuxify.app.ui.AppViewModel
 import com.linuxify.app.ui.components.FactRow
@@ -38,6 +46,13 @@ fun HomeScreen(
     val facts by vm.homeFacts.collectAsStateWithLifecycle()
     val warning by vm.storageWarning.collectAsStateWithLifecycle()
     val services by vm.servicesState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    // Diagnostic loop-closure: a crash report persisted by the last crash stays
+    // reachable after the report screen is gone. If any screen ever crashes
+    // again, the exact stack is one tap away here — no adb, no friction.
+    var showCrashCard by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { showCrashCard = vm.hasCrashReport() }
 
     Column(
         modifier = Modifier
@@ -133,6 +148,31 @@ fun HomeScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+            }
+        }
+
+        if (showCrashCard) {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Diagnostics",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Text(
+                        "A crash report was saved the last time the app hit an unexpected error.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = {
+                            context.startActivity(Intent(context, CrashReportActivity::class.java))
+                        }) { Text("View report") }
+                        TextButton(onClick = {
+                            showCrashCard = false
+                            vm.dismissCrashReport()
+                        }) { Text("Dismiss") }
+                    }
                 }
             }
         }

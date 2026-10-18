@@ -1,13 +1,14 @@
 # SESSION_STATE.md — Linuxify Android
 
-Concise handoff for the next agent session. Current as of 2026-10-18 (Task 9 complete — in-app crash reporting + non-fatal error surfaces; v0.1.0-alpha.5).
+Concise handoff for the next agent session. Current as of 2026-10-18 (Task 11 complete — three on-device crashes root-caused and fixed; v0.1.0-alpha.6).
 
 ## Repository & branch
 
 - Canonical repo: https://github.com/superz1402/linuxify — branch `main`
 - Latest verified remote commit: see `git ls-remote origin main`
 - Releases:
-  - v0.1.0-alpha.5 (current) — crash can no longer be silent: global UncaughtExceptionHandler renders a copyable in-app report (plain-Android activity, :crashreport process); TerminalScreen pre-loads libtermux + guards session spawn; all ViewModel coroutines guarded; ready-gate verifies native binaries (stale marker -> auto-repair); assets: linuxify-0.1.0-alpha.5-release.apk + -debug.apk
+  - v0.1.0-alpha.6 (current) — Terminal NPE fixed (TerminalViewClient now set in AndroidView factory before layout; CTRL/ALT extra keys wired into the real key pipeline); Services crash fixed (LazyColumn-inside-verticalScroll -> bounded Column); vendored TerminalView null-guards mClient; Home Diagnostics card exposes persisted last crash for one-tap copy; assets: linuxify-0.1.0-alpha.6-release.apk
+  - v0.1.0-alpha.5 — crash can no longer be silent: global UncaughtExceptionHandler renders a copyable in-app report (plain-Android activity, :crashreport process); TerminalScreen pre-loads libtermux + guards session spawn; all ViewModel coroutines guarded; ready-gate verifies native binaries (stale marker -> auto-repair); assets: linuxify-0.1.0-alpha.5-release.apk + -debug.apk
   - v0.1.0-alpha.4 (superseded; install works on device but Terminal/Projects/Services taps crashed with "app keeps stopping" — no trace available, hence the crash-report layer)
   - v0.1.0-alpha.3 (superseded; missing loader → device exec failures)
   - v0.1.0-alpha.2 (superseded; had the SafeTarExtractor `..`-symlink drop found on device)

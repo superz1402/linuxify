@@ -6,8 +6,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -63,8 +61,13 @@ fun ServicesScreen(vm: AppViewModel) {
             EmptyState("No services defined", "A default Python HTTP server is provided for testing. Define more services in a future release or run servers directly in the terminal.")
         }
 
-        LazyColumn(Modifier.fillMaxWidth()) {
-            items(state.services, key = { it.def.id }) { s ->
+        // Plain Column, NOT LazyColumn: this screen already lives inside a
+        // verticalScroll parent, and a lazy list measured with unbounded height
+        // throws IllegalStateException — the deterministic Services crash of
+        // alpha.5. The service count is small and bounded, so virtualization is
+        // unnecessary; correctness wins.
+        Column(Modifier.fillMaxWidth()) {
+            state.services.forEach { s ->
                 Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Row(

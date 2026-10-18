@@ -895,7 +895,13 @@ public final class TerminalView extends View {
         if (mEmulator == null || (newColumns != mEmulator.mColumns || newRows != mEmulator.mRows)) {
             mTermSession.updateSize(newColumns, newRows);
             mEmulator = mTermSession.getEmulator();
-            mClient.onEmulatorSet();
+            // Defensive null guard: updateSize() runs from onSizeChanged during the
+            // very first layout pass. If a host forgets setTerminalViewClient() the
+            // old code crashed here before the view ever drew (alpha.5 on-device NPE).
+            // Linuxify's TerminalScreen sets the client in its AndroidView factory,
+            // so this path is normally taken — the guard only converts a hard crash
+            // into a graceful no-op for any future call-order regression.
+            if (mClient != null) mClient.onEmulatorSet();
 
             // Update mTerminalCursorBlinkerRunnable inner class mEmulator on session change
             if (mTerminalCursorBlinkerRunnable != null)

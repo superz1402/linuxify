@@ -1,5 +1,7 @@
 package com.linuxify.app.ui.screens
 
+import android.view.KeyEvent
+import android.view.MotionEvent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -19,6 +21,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -39,6 +42,7 @@ import com.linuxify.app.ui.theme.TerminalBackground
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
 import com.termux.view.TerminalView
+import com.termux.view.TerminalViewClient
 
 /**
  * Real PTY-backed terminal (vendored Termux TerminalView inside Compose).
@@ -50,8 +54,11 @@ fun TerminalScreen(vm: AppViewModel) {
     val context = LocalContext.current
     val sessions = remember { mutableStateListOf<TerminalSession>() }
     var selected by remember { mutableIntStateOf(0) }
-    var ctrlDown by remember { mutableStateOf(false) }
-    var altDown by remember { mutableStateOf(false) }
+    // Held as stable MutableState references (not `by` delegates) so the
+    // TerminalViewClient created once inside the AndroidView factory reads the
+    // live values on every key event, not a stale capture.
+    val ctrlDown = remember { mutableStateOf(false) }
+    val altDown = remember { mutableStateOf(false) }
     var refreshTick by remember { mutableStateOf(0) }
 
     // Load the terminal engine HERE, in a guarded context: a load failure must
@@ -154,6 +161,20 @@ fun TerminalScreen(vm: AppViewModel) {
             AndroidView(
                 factory = { ctx ->
                     TerminalView(ctx, null).apply {
+                        // The client MUST be set before this view is laid out:
+                        // TerminalView.updateSize() invokes mClient.onEmulatorSet()
+                        // during the first onSizeChanged, and a null client crashed
+                        // the app right there (alpha.5 on-device NPE, stack-verified).
+                        setTerminalViewClient(
+                            LinuxifyTerminalViewClient(
+                                ctrlDown = ctrlDown,
+                                altDown = altDown,
+                                // plain assignment, not ++: inside this apply block
+                                // (receiver = TerminalView) the K2 compiler resolves
+                                // inc() on the delegated property ambiguously.
+                                onEmulatorReady = { refreshTick = refreshTick + 1 },
+                            )
+                        )
                         setTextSize(13)
                         attachSession(session)
                     }
@@ -171,18 +192,18 @@ fun TerminalScreen(vm: AppViewModel) {
         }
 
         ExtraKeysRow(
-            ctrlDown = ctrlDown,
-            altDown = altDown,
-            onCtrl = { ctrlDown = !ctrlDown },
-            onAlt = { altDown = !altDown },
+            ctrlDown = ctrlDown.value,
+            altDown = altDown.value,
+            onCtrl = { ctrlDown.value = !ctrlDown.value },
+            onAlt = { altDown.value = !altDown.value },
             onKey = { _, bytes ->
                 sessions.getOrNull(selected)?.write(bytes, 0, bytes.size)
-                ctrlDown = false
-                altDown = false
+                ctrlDown.value = false
+                altDown.value = false
             },
             onCtrlC = {
                 byteArrayOf(0x03).let { b -> sessions.getOrNull(selected)?.write(b, 0, b.size) }
-                ctrlDown = false
+                ctrlDown.value = false
             },
             onNewSession = { spawnSession() },
         )
@@ -243,6 +264,68 @@ private fun ToggleKey(label: String, active: Boolean, onTap: () -> Unit) {
             color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
         )
     }
+}
+
+/**
+ * TerminalViewClient: required by TerminalView — it calls onEmulatorSet() from
+ * updateSize() during the first layout pass, so a view without a client crashes
+ * before it ever draws (the alpha.5 crash). Also feeds the extra-keys row's
+ * CTRL/ALT toggle state into the real key-input pipeline, so CTRL then a key
+ * produces the control character instead of doing nothing.
+ */
+private class LinuxifyTerminalViewClient(
+    private val ctrlDown: MutableState<Boolean>,
+    private val altDown: MutableState<Boolean>,
+    private val onEmulatorReady: () -> Unit,
+) : TerminalViewClient {
+
+    override fun onScale(scale: Float): Float = scale
+
+    override fun onSingleTapUp(e: MotionEvent) {}
+
+    override fun shouldBackButtonBeMappedToEscape(): Boolean = false
+
+    override fun shouldEnforceCharBasedInput(): Boolean = false
+
+    override fun shouldUseCtrlSpaceWorkaround(): Boolean = false
+
+    override fun isTerminalViewSelected(): Boolean = true
+
+    override fun copyModeChanged(copyMode: Boolean) {}
+
+    override fun onKeyDown(keyCode: Int, e: KeyEvent, session: TerminalSession?): Boolean = false
+
+    override fun onKeyUp(keyCode: Int, e: KeyEvent): Boolean = false
+
+    override fun onLongPress(event: MotionEvent): Boolean = false
+
+    override fun readControlKey(): Boolean = ctrlDown.value
+
+    override fun readAltKey(): Boolean = altDown.value
+
+    override fun readShiftKey(): Boolean = false
+
+    override fun readFnKey(): Boolean = false
+
+    override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: TerminalSession?): Boolean = false
+
+    override fun onEmulatorSet() {
+        onEmulatorReady()
+    }
+
+    override fun logError(tag: String, message: String) {}
+
+    override fun logWarn(tag: String, message: String) {}
+
+    override fun logInfo(tag: String, message: String) {}
+
+    override fun logDebug(tag: String, message: String) {}
+
+    override fun logVerbose(tag: String, message: String) {}
+
+    override fun logStackTraceWithMessage(tag: String, message: String, e: Exception) {}
+
+    override fun logStackTrace(tag: String, e: Exception) {}
 }
 
 /** TerminalSessionClient: feeds emulator-driven UI refreshes and system logging. */

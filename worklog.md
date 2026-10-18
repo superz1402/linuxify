@@ -402,3 +402,21 @@ Work Log:
 Stage Summary:
 - Deliverable: linuxify v0.1.0-alpha.5 (release + debug APKs, stable signing, versionCode 5).
 - Next device drill: install alpha.5 over alpha.4 -> tap Terminal/Projects/Services. If any screen still fails, the app now shows the FULL stack trace in-app with a Copy button — paste it into the chat for a pinpoint fix.
+
+---
+Task ID: 11
+Agent: Z (main agent, continuation session)
+Task: User supplied the first on-device crash report (via the alpha.5 in-app reporter): tapping Terminal NPEs in TerminalView.updateSize -> TerminalViewClient.onEmulatorSet() on a null client. Projects and Services also crashed. Root-cause all three and ship a fix.
+
+Work Log:
+- Root cause 1 (Terminal, stack-verified from device): TerminalScreen's AndroidView factory never called setTerminalViewClient(). First layout -> onSizeChanged -> updateSize() -> mClient.onEmulatorSet() -> NPE before the view ever drew.
+- Root cause 2 (Services, statically proven): LazyColumn nested inside a verticalScroll Column -> measured with infinite max height -> IllegalStateException. Deterministic since alpha.1; nobody had tapped Services on-device before.
+- Root cause 3 (Projects): full static audit found NO deterministic fault (pure-Compose path, guarded VM calls). Report exists on the user's device. Added a Home "Diagnostics" card (persisted last-crash.txt -> one-tap View report / Dismiss) so any remaining crash is relayable without adb.
+- Fixes shipped: TerminalScreen now sets a full LinuxifyTerminalViewClient in the factory BEFORE attachSession; CTRL/ALT extra-key toggles are wired into the real key pipeline via readControlKey()/readAltKey() (they previously only changed highlight state); vendored TerminalView.updateSize() null-guards mClient (graceful no-op on call-order regressions); ServicesScreen uses a plain bounded Column (services list is small; correctness > virtualization); PackagesScreen dead LazyColumn import removed.
+- K2 quirk handled: `refreshTick++` inside the AndroidView factory's apply{} block resolved inc() ambiguously -> replaced with explicit reassignment + comment.
+- Build env rebuilt on this host (Temurin JDK 21.0.12.1 + SDK platform-35/build-tools 35.0.0); 37/37 unit tests; assembleRelease SUCCESS.
+- Verified: versionCode 6 / versionName 0.1.0-alpha.6; apksigner cert SHA-256 8f55e46675c2...cca9 == alpha.5 cert -> overwrite install, no uninstall; arm64-v8a present.
+
+Stage Summary:
+- Deliverable: linuxify v0.1.0-alpha.6 (release APK; stable signing maintained).
+- On-device drill: install alpha.6 over alpha.5 -> tap Terminal (expect prompt), Projects, Services (expect list). If anything still fails: Home -> Diagnostics -> View report -> Copy -> paste in chat.

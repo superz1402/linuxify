@@ -47,6 +47,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun runtimeBinariesOk(): Boolean =
         RuntimeDirs.prootAvailable(ctx) && RuntimeDirs.prootLoaderAvailable(ctx)
 
+    /** True if a persisted crash report exists (shown on Home for one-tap access). */
+    fun hasCrashReport(): Boolean = runCatching { CrashReporter.reportFile(ctx).exists() }.getOrDefault(false)
+
+    /** User dismissed the crash-report card on Home — delete the persisted report. */
+    fun dismissCrashReport(onDone: () -> Unit = {}) {
+        viewModelScope.launch(Dispatchers.IO + bgGuard) {
+            runCatching { CrashReporter.reportFile(ctx).delete() }
+            withContext(kotlinx.coroutines.Dispatchers.Main) { onDone() }
+        }
+    }
+
     data class HomeFacts(
         val installed: Boolean,
         val distro: String? = null,
