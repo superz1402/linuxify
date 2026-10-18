@@ -420,3 +420,21 @@ Work Log:
 Stage Summary:
 - Deliverable: linuxify v0.1.0-alpha.6 (release APK; stable signing maintained).
 - On-device drill: install alpha.6 over alpha.5 -> tap Terminal (expect prompt), Projects, Services (expect list). If anything still fails: Home -> Diagnostics -> View report -> Copy -> paste in chat.
+
+---
+Task ID: 13
+Agent: Z (main agent, continuation session)
+Task: User report on alpha.7 — long-press terminal toolbar's Copy and Paste items do nothing. Diagnose and ship.
+
+Work Log:
+- Re-synced the clone: local HEAD was alpha.5 + a stale uncommitted pre-alpha.7 draft; remote main was the canonical alpha.7. Hard-reset to origin/main (80fa703).
+- Traced the full long-press path in vendored Termux code: onLongPress -> startTextSelectionMode -> TextSelectionCursorController ActionMode; Copy -> TerminalSession.onCopyTextToClipboard(), Paste -> TerminalSession.onPasteTextFromClipboard() — both delegate to TerminalSessionClient, where LinuxifySessionClient had EMPTY implementations. Menu rendered; taps were silent no-ops. Exactly matches the user report.
+- Restored the disposable build env (Temurin JDK 21.0.12.1+1 at ~/toolchain, SDK platform-35 + build-tools 35.0.0 + cmdline-tools at ~/android-sdk, local.properties).
+- Fix: implemented both client callbacks in TerminalScreen.kt — Copy writes ClipData to system ClipboardManager (toast on <13; system overlay on 13+), Paste coerces the primary clip and feeds TerminalEmulator.paste() (bracketed paste + escape stripping).
+- Hardened: null-guard for degenerate selections in the copy path (getSelectedText() can return null -> trim() NPE); removed the dead "More…" toolbar item (TerminalView has no context-menu listener — it could never work).
+- v0.1.0-alpha.8 (commit c79c1a6, tag pushed, release id 416514583): assembleDebug + assembleRelease + testDebugUnitTest 45/45 on this server; apksigner cert SHA-256 8f55e466…cca9 verified on both APKs (overwrite-install over alpha.7, rootfs kept); release asset linuxify-0.1.0-alpha.8-release.apk (12,441,362 B) uploaded; APKs also delivered to /home/z/my-project/download/.
+- First asset-upload attempt targeted no release id and failed silently — re-uploaded against release id 416514583 and verified the asset listing.
+
+Stage Summary:
+- Copy/Paste in the terminal now hit the real Android clipboard; empty-selection crash vector closed; dead "More…" removed.
+- Runtime-first checkpoint: build + unit + signature verification on server; the on-device clipboard drill (long-press -> Copy -> long-press -> Paste) is with the user's device.
