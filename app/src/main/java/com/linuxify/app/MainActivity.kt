@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Icon
@@ -23,9 +24,11 @@ import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Description
@@ -51,12 +54,17 @@ import com.linuxify.app.ui.screens.TerminalScreen
 import com.linuxify.app.ui.theme.LinuxifyTheme
 
 class MainActivity : ComponentActivity() {
+    @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             LinuxifyTheme {
-                LinuxifyRoot()
+                // Window size class is computed at the setContent scope (its own
+                // recomposition scope) — cheap, and recomputed only on real
+                // configuration changes, never on per-screen state churn.
+                val widthSizeClass = calculateWindowSizeClass(this@MainActivity).widthSizeClass
+                LinuxifyRoot(widthSizeClass = widthSizeClass)
             }
         }
     }
@@ -68,11 +76,12 @@ private data class Destination(
     val icon: ImageVector,
 )
 
-@OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
 @Composable
-fun LinuxifyRoot(vm: AppViewModel = viewModel()) {
-    val widthClass = calculateWindowSizeClass(androidx.compose.ui.platform.LocalContext.current as android.app.Activity)
-    val compact = widthClass.widthSizeClass == WindowWidthSizeClass.Compact
+fun LinuxifyRoot(
+    widthSizeClass: WindowWidthSizeClass,
+    vm: AppViewModel = viewModel(),
+) {
+    val compact = widthSizeClass == WindowWidthSizeClass.Compact
 
     val navController = rememberNavController()
     val destinations = listOf(
@@ -91,10 +100,15 @@ fun LinuxifyRoot(vm: AppViewModel = viewModel()) {
     // A ready marker alone is not enough — the packaged native binaries must be
     // present too (an update that lost them, or a corrupt state, must route to
     // setup and self-heal, never into screens that would crash on spawn).
+    //
+    // The marker/binary checks are disk I/O; remember keyed on the install state
+    // so they run once per state change, not on every recomposition of this root
+    // (second alpha.6 jank source).
     val installState by vm.installer.state.collectAsStateWithLifecycle()
-    val runtimeReady =
+    val runtimeReady = remember(installState) {
         (installState is com.linuxify.app.runtime.RootfsInstaller.InstallState.Ready ||
             vm.installer.isReadyMarkerPresent()) && vm.runtimeBinariesOk()
+    }
 
     if (!runtimeReady) {
         SetupScreen(vm = vm, onInstalled = { vm.refreshHomeFacts() })
@@ -126,7 +140,11 @@ fun LinuxifyRoot(vm: AppViewModel = viewModel()) {
         Row(
             Modifier
                 .fillMaxSize()
-                .padding(padding),
+                .padding(padding)
+                // resize the content when the IME opens — with edge-to-edge, the
+                // window does not shrink on its own, and the terminal must see
+                // the reduced height so its rows/wrapping match the visible area.
+                .imePadding(),
         ) {
             if (!compact) {
                 NavigationRail {

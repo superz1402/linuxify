@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.linuxify.app.pkg.AptManager
 import com.linuxify.app.proj.ProjectsManager
 import com.linuxify.app.runtime.CrashReporter
+import com.linuxify.app.runtime.GuestGroups
 import com.linuxify.app.runtime.LinuxRuntime
 import com.linuxify.app.runtime.RootfsInstaller
 import com.linuxify.app.runtime.RuntimeDirs
@@ -79,6 +80,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val storageWarning: StateFlow<String?> = _storageWarning
 
     init {
+        // Idempotent in-place upgrade for an ALREADY-extracted rootfs: alpha.7
+        // patches guest /etc/group with the app's runtime groups (kills the
+        // "cannot find name for group ID" prompt warnings). Runs on every start;
+        // a fully-patched rootfs makes it a cheap no-op. Fresh installs get the
+        // same fix inside configureUserspace().
+        viewModelScope.launch(Dispatchers.IO + bgGuard) {
+            runCatching { GuestGroups.ensureRuntimeGroupsInGuest(RuntimeDirs.rootfsDir(ctx)) }
+        }
         refreshHomeFacts()
         viewModelScope.launch(bgGuard) {
             // periodic refresh of free-space warning while the app is open (cheap check)

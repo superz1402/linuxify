@@ -509,6 +509,19 @@ class RootfsInstaller(private val ctx: Context) {
 
         // workspace directory bound from app projects dir
         File(rootfs, "root").mkdirs()
+
+        // Resolve the app's runtime groups inside the guest: Ubuntu's
+        // /etc/bash.bashrc runs $(groups) on every interactive shell, and the
+        // Android supplementary groups (inet 3003, ...) are not in the base
+        // image's /etc/group — each one printed a "cannot find name for group
+        // ID" warning at the prompt on device. Pure file write, no exec needed.
+        val groupLines = GuestGroups.ensureRuntimeGroupsInGuest(rootfs)
+        if (groupLines == null) {
+            // Non-fatal: an unpatched group file costs cosmetic warnings only.
+            // Record it so the behavior is diagnosable rather than mysterious.
+            val log = File(rootfs, "etc/linuxify-group-patch.txt")
+            runCatching { log.writeText("group patch failed (non-fatal)\n") }
+        }
     }
 
     private fun File.writeTextCompat(text: String) {

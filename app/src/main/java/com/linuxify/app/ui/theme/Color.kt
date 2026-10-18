@@ -42,5 +42,5 @@ val StatusNeutralDark = Color(0xFF8A93A6)
 val StatusNeutralLight = Color(0xFF5C6672)
 
 // Terminal screen colors
-val TerminalBackground = Color(0xFF0A0D11)
+val TerminalBackground = Color(0xFF000000)
 val TerminalForeground = Color(0xFFD6DCE3)

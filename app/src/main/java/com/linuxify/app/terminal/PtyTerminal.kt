@@ -30,7 +30,12 @@ object PtyTerminal {
         val argv = mutableListOf(proot.absolutePath)
         argv += runtime.buildProotArgs(workdir)
         argv += "/bin/bash"
-        argv += "-lc"
+        // outer shell: plain -c (NOT -lc). A login outer shell would run the whole
+        // profile chain TWICE (outer reads profile, then exec replaces it with an
+        // inner login bash that reads it all again) — slower startup and the
+        // on-device "cannot find name for group ID" lines printed repeatedly.
+        // The inner `bash -l` below is the real login shell the user interacts with.
+        argv += "-c"
         // unset LD_LIBRARY_PATH for the guest: it exists for proot's own bionic
         // linking (syslib shims) and must not shadow guest libraries; then hand
         // over to a real login shell so profile.d and PS1 behave normally.
