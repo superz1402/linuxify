@@ -7,7 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.linuxify.app.pkg.AptManager
 import com.linuxify.app.proj.ProjectsManager
 import com.linuxify.app.runtime.CrashReporter
-import com.linuxify.app.runtime.GuestGroups
+import com.linuxify.app.runtime.GuestPatches
 import com.linuxify.app.runtime.LinuxRuntime
 import com.linuxify.app.runtime.RootfsInstaller
 import com.linuxify.app.runtime.RuntimeDirs
@@ -80,13 +80,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val storageWarning: StateFlow<String?> = _storageWarning
 
     init {
-        // Idempotent in-place upgrade for an ALREADY-extracted rootfs: alpha.7
-        // patches guest /etc/group with the app's runtime groups (kills the
-        // "cannot find name for group ID" prompt warnings). Runs on every start;
-        // a fully-patched rootfs makes it a cheap no-op. Fresh installs get the
-        // same fix inside configureUserspace().
+        // Idempotent in-place upgrade for an ALREADY-extracted rootfs: group
+        // resolution + sudo-as-admin marker + profile bell hook (alpha.11).
+        // Runs on every start; a fully-patched rootfs makes it a cheap no-op.
+        // Fresh installs get the same patches inside configureUserspace(), and
+        // PtyTerminal re-checks before every spawn (memoized, ~free).
         viewModelScope.launch(Dispatchers.IO + bgGuard) {
-            runCatching { GuestGroups.ensureRuntimeGroupsInGuest(RuntimeDirs.rootfsDir(ctx)) }
+            val summary = runCatching { GuestPatches.applyAll(RuntimeDirs.rootfsDir(ctx)) }.getOrNull()
+            if (summary == null) {
+                // Non-fatal by design, but NEVER silent — an unpatched guest is
+                // exactly the class of quiet misbehavior that cost us alpha.7's
+                // "fixed" group warnings (the patch silently didn't apply).
+                CrashReporter.logNonFatal(getApplication(), "GuestPatches.applyAll", IllegalStateException("guest patch failed (rootfs missing or not extracted)"))
+            }
         }
         refreshHomeFacts()
         viewModelScope.launch(bgGuard) {

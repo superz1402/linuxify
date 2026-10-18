@@ -475,3 +475,23 @@ Work Log:
 Stage Summary:
 - Shipped: real background running (the user's top priority), completion notifications, hardened download recovery, full CLI parity audit, all docs current.
 - Honest split: everything above is build-verified + unit-tested; the on-device drills (notification appears, shell survives backgrounding, wake lock keeps servers alive) are the user's next step.
+
+---
+Task ID: 16
+Agent: Z (main agent, continuation session)
+Task: User reports every terminal open still starts with "groups: cannot find name for group ID 3003/9997/20495/50495" before the prompt — despite alpha.7's claimed fix.
+
+Work Log:
+- ENVIRONMENT EVENT (recurring): local clone rolled back again (HEAD=alpha.5; JDK/SDK wiped). Recovered: hard reset to origin/main (which already had Task 15's alpha.10 commit 72af460 — CODE ONLY: no tag, no GitHub release, no asset; the previous session died before the release step) + reinstalled JDK 21.0.12.1+1 and Android SDK.
+- ROOT-CAUSED the warnings with a real reproduction: downloaded proot v5.5.0 static (GitHub API, SHA-256-verified against SHA256SUMS) + the REAL ubuntu-base-24.04.5 amd64 tarball; ran the app's exact proot flags + login bash under `script` for a PTY. REPRODUCED the exact symptom. Mechanism: /etc/profile sources /etc/bash.bashrc, whose sudo-hint block runs $(groups) on EVERY interactive login shell unless $HOME/.sudo_as_admin_successful exists; coreutils warns once per supplementary gid missing from the guest /etc/group. proot passes the kernel supplementary list through (user namespaces would strip it — that's why an unshare-based repro shows nothing).
+- Explained the alpha.7 miss: it patched gids from /proc/self/groups alone; the empty/partial read on the Android 16 device left all four supplementary gids unmapped, and the failure was silent. Lesson recorded: silent no-ops must be logged; guest-side fixes need an explicit on-device check.
+- Verified BOTH fix layers on the host, independently: (1) appending linuxify-g<gid>:x:<gid>: to the guest /etc/group → clean prompt; (2) /root/.sudo_as_admin_successful marker + HOME=/root → clean prompt even with the gid unmapped. Also proved a wrong HOME defeats the marker (control run) — the app always sets HOME=/root.
+- Implemented GuestPatches (new object, idempotent, memoized per process): applies group patch + marker + rewrites etc/profile.d/linuxify.sh (single owner of that file). GuestGroups gid discovery hardened: /proc/self/groups + /proc/self/status "Groups:" fallback + static well-known floor (3001/3002/3003/3004/9997). applyAll now runs at THREE points: configureUserspace (fresh install), AppViewModel.init (every start; failure now CrashReporter-logged, never silent), PtyTerminal.newShellSession (before every spawn, memoized).
+- IN-SHELL RUN-COMPLETED NOTIFICATIONS (completes Task 15's feature, which only covered session/service exit): GuestPatches' profile installs PROMPT_COMMAND printf '\a' (interactive shells only); vendored emulator routes BEL → TerminalSession.onBell → LinuxifySessionClient.onBell; RunCompletionGate (pure, unit-tested) notifies only while backgrounded, throttled to 1/3 s. Host-verified the hook emits BEL per prompt (cat -A shows ^G).
+- RuntimeForegroundService: fixed a wakelock leak — onStartCommand re-acquired without releasing on START_STICKY restart.
+- Kotlin gotcha recorded: "\$" is NOT an escape inside raw strings (it leaks a backslash into generated shell files and "${" still opens a template) — literal dollars written via ${'$'}.
+- 61/61 unit tests (13 new: GuestPatches behavior + idempotency + memo + legacy-profile upgrade, gid parsers, runtimeGids floor, RunCompletionGate rules). assembleRelease clean; versionCode 11; cert 8f55e466…cca9 verified via apksigner.
+
+Stage Summary:
+- Shipped: clean terminal prompt (two independent, host-verified fix layers), in-shell "command finished" notifications, wakelock leak fix; alpha.11 carries the previously unreleased alpha.10 feature set.
+- Honest split: reproduction + both fixes verified on the HOST against the real ubuntu-base; the on-device drill (clean prompt on the moto g85, notification on backgrounded command completion) is with the user.

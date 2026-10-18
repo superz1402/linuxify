@@ -21,8 +21,10 @@ daemon, no Termux dependency, no remote server required.
   and a partial wake lock) keeps the Linux userland alive while you're outside the app —
   sessions and servers survive screen-off and app switches. It releases itself the moment
   the last session/service ends.
-- **Notifies on completion**: a "run completed" notification appears when a backgrounded
-  shell session or managed service exits (suppressed while you're actually watching).
+- **Notifies on completion**: a "run completed" notification appears when you leave
+  the app and (a) a command you started in the terminal finishes (bash rings the
+  bell on prompt return — the app converts it), or (b) a shell session or managed
+  service exits. Suppressed while you're actually watching.
 - **Recovers from flaky internet**: the rootfs download uses HTTP Range resume,
   exponential backoff with jitter (up to 8 attempts), and checksum verification before
   anything is trusted.
@@ -36,7 +38,7 @@ daemon, no Termux dependency, no remote server required.
 
 ## Status
 
-Early development (v0.1.0-alpha.10). See [worklog.md](worklog.md), [SESSION_STATE.md](SESSION_STATE.md),
+Early development (v0.1.0-alpha.11). See [worklog.md](worklog.md), [SESSION_STATE.md](SESSION_STATE.md),
 [docs/CLI_PARITY.md](docs/CLI_PARITY.md) (full CLI ⇄ app feature audit) and the GitHub
 issue tracker for verified progress. What is claimed where is strictly separated into:
 **build-verified**, **host-verified**, **device-verified** — anything not labeled is not verified.

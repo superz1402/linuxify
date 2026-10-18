@@ -63,15 +63,50 @@ class GuestGroupsTest {
     }
 
     @Test
-    fun `ensureRuntimeGroups appends to a real-looking rootfs`() {
+    fun `ensureRuntimeGroups appends at least the well-known floor to a real rootfs`() {
         val dir = Files.createTempDirectory("rootfs").toFile()
         File(dir, "bin").mkdirs()
         File(dir, "etc").mkdirs()
         File(dir, "etc/group").writeText("root:x:0:\n")
         val result = GuestGroups.ensureRuntimeGroupsInGuest(dir)
-        // On JVM, android.system.Os is a stub, so runtimeGids() is empty -> 0 appended.
-        // That exercises the guard path; the append path is covered by missingEntries tests.
-        assertEquals(0, result)
-        assertEquals("root:x:0:\n", File(dir, "etc/group").readText())
+        // Since alpha.11 runtimeGids() always contains the well-known Android
+        // floor (3001-3004, 9997) — even if every proc read fails. On the JVM it
+        // also picks up the host's own gids from /proc. Device-independent
+        // assertion: the two universal groups MUST end up named.
+        assertTrue("expected gids appended, got $result", result != null && result >= 2)
+        val text = File(dir, "etc/group").readText()
+        assertTrue(text.contains("linuxify-g3003:x:3003:"))
+        assertTrue(text.contains("linuxify-g9997:x:9997:"))
+    }
+
+    @Test
+    fun `parses procs-groups one-gid-per-line format`() {
+        val parsed = GuestGroups.parseProcGroups("0\n1001\n3003\n\njunk\n9997")
+        assertEquals(setOf(0, 1001, 3003, 9997), parsed)
+    }
+
+    @Test
+    fun `parses proc-status Groups line format`() {
+        val status = """
+            Uid:        10495   10495   10495   10495
+            Gid:        10495   10495   10495   10495
+            Groups:     3003 9997 20495 50495
+            VmPeak:        12345 kB
+        """.trimIndent()
+        val parsed = GuestGroups.parseStatusGroups(status)
+        assertEquals(setOf(3003, 9997, 20495, 50495), parsed)
+    }
+
+    @Test
+    fun `status parser returns empty for missing Groups line`() {
+        assertTrue(GuestGroups.parseStatusGroups("Name: init\nUid:\t0\t0\t0\t0\n").isEmpty())
+        assertTrue(GuestGroups.parseStatusGroups(null).isEmpty())
+    }
+
+    @Test
+    fun `runtimeGids always contains the universal android groups`() {
+        val gids = GuestGroups.runtimeGids()
+        assertTrue("3003 (inet) must always be named", 3003 in gids)
+        assertTrue("9997 (everyone) must always be named", 9997 in gids)
     }
 }

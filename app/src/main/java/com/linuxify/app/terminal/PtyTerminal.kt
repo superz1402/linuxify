@@ -1,6 +1,7 @@
 package com.linuxify.app.terminal
 
 import android.content.Context
+import com.linuxify.app.runtime.GuestPatches
 import com.linuxify.app.runtime.LinuxRuntime
 import com.linuxify.app.runtime.RuntimeDirs
 import com.termux.terminal.TerminalSession
@@ -26,6 +27,14 @@ object PtyTerminal {
         val proot = RuntimeDirs.prootBinary(ctx)
         check(proot.exists()) { "proot binary missing — runtime not installed?" }
         val runtime = LinuxRuntime(ctx)
+
+        // Self-heal the guest BEFORE the shell reads its startup files: group
+        // resolution, sudo-as-admin marker, profile bell hook. Memoized per
+        // process — after the first successful pass this is a pointer compare.
+        // Without this, an app update's new patches would only reach a rootfs
+        // after the async AppViewModel pass ran — or never, if that pass fails
+        // silently (the exact way the alpha.7 group fix missed devices).
+        runCatching { GuestPatches.applyAll(RuntimeDirs.rootfsDir(ctx)) }
 
         val argv = mutableListOf(proot.absolutePath)
         argv += runtime.buildProotArgs(workdir)

@@ -42,6 +42,10 @@ class RuntimeForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startAsForeground()
+        // Release any previous lock first: onStartCommand runs again after a
+        // START_STICKY restart, and re-acquiring without releasing would leak
+        // the old lock until its 6 h timeout (battery drain for nothing).
+        wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = (getSystemService(Context.POWER_SERVICE) as? PowerManager)
             ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "linuxify:runtime")
             ?.apply { setReferenceCounted(false); acquire(WAKELOCK_MS) }

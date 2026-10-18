@@ -36,19 +36,55 @@ object GuestGroups {
             .map { "linuxify-g$it:x:$it:" }
     }
 
-    /** The app process's runtime groups, as the spawned guest children inherit them. */
+    /**
+     * Pure parser for /proc/self/groups content (one gid per line).
+     */
+    fun parseProcGroups(text: String?): Set<Int> = buildSet {
+        text?.split(Regex("\\s+"))?.forEach { token ->
+            token.toIntOrNull()?.let { add(it) }
+        }
+    }
+
+    /**
+     * Pure parser for the "Groups:" line of /proc/self/status
+     * (space-separated supplementary gids on a single line).
+     */
+    fun parseStatusGroups(text: String?): Set<Int> = buildSet {
+        text?.lineSequence()
+            ?.firstOrNull { it.startsWith("Groups:") }
+            ?.removePrefix("Groups:")
+            ?.trim()
+            ?.split(Regex("\\s+"))
+            ?.forEach { token -> token.toIntOrNull()?.let { add(it) } }
+    }
+
+    /**
+     * The app process's runtime groups, as the spawned guest children inherit them.
+     *
+     * Sources, merged (all optional — the union is what matters):
+     *  1. /proc/self/groups — kernel supplementary list, one gid per line;
+     *  2. /proc/self/status "Groups:" — the SAME kernel data in a different file.
+     *     alpha.7 relied on source 1 alone and on at least one device (Android 16)
+     *     the guest still showed warnings for every supplementary gid — exactly the
+     *     set 3003/9997/2xxxx/5xxxx — while the primary gid (which IS resolvable
+     *     through Os.getgid()) was patched. Reading both sources removes the single
+     *     point of failure;
+     *  3. a static floor of the groups EVERY Android app process carries
+     *     (3001 net_bt, 3002 net_bt_admin, 3003 inet, 3004 net_bw, 9997 everyone).
+     *     Harmless if the process is not in one of them (no warning was printed
+     *     for it anyway); naming them costs one line each and guarantees the two
+     *     universal groups resolve even if both proc reads fail.
+     */
     fun runtimeGids(): Set<Int> = buildSet {
         runCatching { add(Os.getgid()) }
-        // /proc/self/groups is the kernel's authoritative supplementary list —
-        // exactly what the guest's $(groups) resolution sees through proot
-        // (Os has no portable getgroups across the API levels we support).
-        runCatching {
-            File("/proc/self/groups").readText().split(Regex("\\s+")).forEach { token ->
-                token.toIntOrNull()?.let { add(it) }
-            }
-        }
+        runCatching { addAll(parseProcGroups(File("/proc/self/groups").readText())) }
+        runCatching { addAll(parseStatusGroups(File("/proc/self/status").readText())) }
+        addAll(WELL_KNOWN_ANDROID_GIDS)
         remove(-1)
     }
+
+    /** Groups every Android app process may carry (see runtimeGids()). */
+    val WELL_KNOWN_ANDROID_GIDS: Set<Int> = setOf(3001, 3002, 3003, 3004, 9997)
 
     /**
      * Idempotently patch <rootfs>/etc/group with the runtime groups.

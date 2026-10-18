@@ -5,7 +5,7 @@ Companion CLI reference: [Bilal140202/linuxify](https://github.com/Bilal140202/l
 `main`). The CLI has 29 command files; its user-facing command list is in its README.
 
 This document is the honest per-command comparison of what the CLI offers versus
-what the Android app (`com.linuxify.app`, v0.1.0-alpha.10) implements. Where the
+what the Android app (`com.linuxify.app`, v0.1.0-alpha.11) implements. Where the
 app is deliberately different, the reason is given. Nothing is claimed as "done"
 that is not actually in the shipped app.
 
@@ -56,7 +56,9 @@ no meaning on the app's architecture.
   clipboard, floating share-log icon.
 - Foreground-service background running: sessions/services keep running with the
   screen off (partial wake lock), persistent notification, auto-release when idle.
-- "Run completed" notifications for background sessions/services.
+- "Run completed" notifications: both for backgrounded sessions/services that
+  exit AND for commands that finish inside a live shell while the user is away
+  (guest PROMPT_COMMAND bell → app notification; foreground never buzzes).
 - Flaky-network auto-recovery: HTTP Range resume + exponential backoff + jitter +
   checksum-verified retry on the rootfs download.
 - Honest state reporting (build-verified vs device-verified), global crash reporting.

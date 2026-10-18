@@ -129,7 +129,32 @@ class LinuxifySessionClient(private val context: Context) : TerminalSessionClien
         }
     }
 
-    override fun onBell(session: TerminalSession) {}
+    /**
+     * BEL while the app is backgrounded = "the prompt returned" = a command the
+     * user left running has finished. The guest profile installs a
+     * PROMPT_COMMAND that prints '\a' right before every prompt (see
+     * GuestPatches.PROFILE_SH); the vendored emulator routes BEL to this
+     * callback. In the foreground the user is watching — never notify.
+     */
+    override fun onBell(session: TerminalSession) {
+        val now = System.currentTimeMillis()
+        if (!RunCompletionGate.shouldNotify(
+                foreground = com.linuxify.app.LinuxifyApp.isInForeground,
+                nowMs = now,
+                lastNotifiedMs = lastBellNotifiedMs,
+            )
+        ) return
+        lastBellNotifiedMs = now
+        val idx = TerminalSessionRegistry.sessions.indexOf(session)
+        val label = if (idx >= 0) "sh ${idx + 1}" else "shell"
+        RuntimeNotifier.runCompleted(
+            context,
+            title = "Command finished — $label is ready",
+            text = "The prompt returned while you were away. Tap to return to Linuxify.",
+        )
+    }
+
+    private var lastBellNotifiedMs = 0L
 
     override fun onColorsChanged(session: TerminalSession) {
         redraw(session)

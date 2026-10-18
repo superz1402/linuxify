@@ -492,18 +492,6 @@ class RootfsInstaller(private val ctx: Context) {
         resolv.parentFile?.mkdirs()
         resolv.writeTextCompat("nameserver 8.8.8.8\nnameserver 1.1.1.1\n")
 
-        // profile with a friendly prompt + env
-        val profileDir = File(rootfs, "etc/profile.d")
-        profileDir.mkdirs()
-        File(profileDir, "linuxify.sh").writeTextCompat(
-            """
-            # Added by Linuxify (com.linuxify.app)
-            export PS1='\u@\h:\w\$ '
-            export TMPDIR=/tmp
-            export LANG=C.UTF-8
-            """.trimIndent() + "\n",
-        )
-
         // os-release sanity for motd/uname-based checks
         val hostInfo = File(rootfs, "etc/linuxify-host.json")
         hostInfo.writeTextCompat(
@@ -518,17 +506,15 @@ class RootfsInstaller(private val ctx: Context) {
         // workspace directory bound from app projects dir
         File(rootfs, "root").mkdirs()
 
-        // Resolve the app's runtime groups inside the guest: Ubuntu's
-        // /etc/bash.bashrc runs $(groups) on every interactive shell, and the
-        // Android supplementary groups (inet 3003, ...) are not in the base
-        // image's /etc/group — each one printed a "cannot find name for group
-        // ID" warning at the prompt on device. Pure file write, no exec needed.
-        val groupLines = GuestGroups.ensureRuntimeGroupsInGuest(rootfs)
-        if (groupLines == null) {
-            // Non-fatal: an unpatched group file costs cosmetic warnings only.
+        // profile + group/marker patches are owned by GuestPatches (single
+        // source of truth, shared with the in-place upgrade path in AppViewModel
+        // and the per-session self-heal in PtyTerminal).
+        val patchSummary = GuestPatches.applyAll(rootfs)
+        if (patchSummary == null) {
+            // Non-fatal: an unpatched guest costs cosmetic warnings only.
             // Record it so the behavior is diagnosable rather than mysterious.
             val log = File(rootfs, "etc/linuxify-group-patch.txt")
-            runCatching { log.writeText("group patch failed (non-fatal)\n") }
+            runCatching { log.writeText("guest patch failed (non-fatal)\n") }
         }
     }
 
