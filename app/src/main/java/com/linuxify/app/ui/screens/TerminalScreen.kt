@@ -3,6 +3,7 @@ package com.linuxify.app.ui.screens
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.text.TextUtils
 import android.view.KeyEvent
@@ -13,6 +14,7 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -20,7 +22,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -39,13 +44,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.linuxify.app.R
 import com.linuxify.app.terminal.PtyTerminal
+import com.linuxify.app.terminal.TerminalLogShare
 import com.linuxify.app.runtime.CrashReporter
 import com.linuxify.app.ui.AppViewModel
 import com.linuxify.app.ui.components.ErrorState
@@ -74,6 +84,9 @@ import kotlin.math.roundToInt
  *  - Extra keys: Termux's default two rows (ESC / - HOME ↑ END PGUP, then
  *    TAB CTRL ALT ← ↓ → PGDN \\), with CTRL/ALT as sticky modifiers applied to
  *    the next key, exactly like Termux.
+ *  - Share log: a small translucent floating button (bottom-right) captures
+ *    the full transcript — scrollback AND screen — and opens the Android
+ *    share sheet, so the log can be handed to any chat/AI app in two taps.
  */
 @Composable
 fun TerminalScreen(vm: AppViewModel) {
@@ -189,40 +202,51 @@ fun TerminalScreen(vm: AppViewModel) {
                     val safeIndex = selected.coerceIn(0, sessions.size - 1)
                     val session = sessions[safeIndex]
 
-                    AndroidView(
-                        factory = { ctx ->
-                            TerminalView(ctx, null).apply {
-                                // Plain View is NOT focusable by default — without this,
-                                // requestFocus() from taps is a no-op and the IME can
-                                // never appear (the alpha.6 "keyboard never opens" bug).
-                                isFocusable = true
-                                isFocusableInTouchMode = true
-                                setTextSize(fontSizePx)
-                                setTerminalViewClient(
-                                    LinuxifyTerminalViewClient(
-                                        view = this,
-                                        initialFontSize = fontSizePx,
-                                        ctrlDown = ctrlDown,
-                                        altDown = altDown,
-                                        onFontResized = { fontSizePx = it },
-                                    )
-                                )
-                                attachSession(session)
-                                terminalView = this
-                            }
-                        },
-                        update = { view ->
-                            if (view.mTermSession !== session) {
-                                view.attachSession(session)
-                            }
-                            // No onScreenUpdated() here: redraws are driven by session
-                            // callbacks (real-time) instead of recompositions (laggy).
-                        },
-                        onRelease = { terminalView = null },
-                        modifier = Modifier
+                    Box(
+                        Modifier
                             .weight(1f)
                             .fillMaxWidth(),
-                    )
+                    ) {
+                        AndroidView(
+                            factory = { ctx ->
+                                TerminalView(ctx, null).apply {
+                                    // Plain View is NOT focusable by default — without this,
+                                    // requestFocus() from taps is a no-op and the IME can
+                                    // never appear (the alpha.6 "keyboard never opens" bug).
+                                    isFocusable = true
+                                    isFocusableInTouchMode = true
+                                    setTextSize(fontSizePx)
+                                    setTerminalViewClient(
+                                        LinuxifyTerminalViewClient(
+                                            view = this,
+                                            initialFontSize = fontSizePx,
+                                            ctrlDown = ctrlDown,
+                                            altDown = altDown,
+                                            onFontResized = { fontSizePx = it },
+                                        )
+                                    )
+                                    attachSession(session)
+                                    terminalView = this
+                                }
+                            },
+                            update = { view ->
+                                if (view.mTermSession !== session) {
+                                    view.attachSession(session)
+                                }
+                                // No onScreenUpdated() here: redraws are driven by session
+                                // callbacks (real-time) instead of recompositions (laggy).
+                            },
+                            onRelease = { terminalView = null },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+
+                        ShareLogButton(
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(10.dp),
+                            onTap = { shareTranscript(context, session, "sh ${safeIndex + 1}") },
+                        )
+                    }
                 }
 
                 ExtraKeys(
@@ -258,6 +282,53 @@ private val TermuxForeground = Color(0xFFE0E0E0)
 private fun raiseKeyboard(view: View) {
     val imm = view.context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
     if (imm != null) imm.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT)
+}
+
+/**
+ * Capture the full transcript (scrollback + screen) of [session] and open the
+ * system share sheet as plain text — one tap, any app (chat, mail, AI client).
+ */
+private fun shareTranscript(context: Context, session: TerminalSession, sessionLabel: String) {
+    val transcript = session.emulator?.screen?.transcriptText
+    if (transcript.isNullOrBlank()) {
+        Toast.makeText(context, "Terminal log is empty", Toast.LENGTH_SHORT).show()
+        return
+    }
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, TerminalLogShare.buildShareText(transcript, sessionLabel))
+        putExtra(Intent.EXTRA_TITLE, "Linuxify terminal log")
+    }
+    runCatching {
+        context.startActivity(Intent.createChooser(send, "Share terminal log"))
+    }.onFailure {
+        CrashReporter.logNonFatal(context, "shareTranscript", it)
+        Toast.makeText(context, "No app can accept shared text", Toast.LENGTH_SHORT).show()
+    }
+}
+
+/**
+ * Small translucent floating button pinned to the bottom-right of the terminal
+ * area. 44 dp touch target, subdued so live terminal content stays readable
+ * underneath.
+ */
+@Composable
+private fun ShareLogButton(modifier: Modifier = Modifier, onTap: () -> Unit) {
+    Box(
+        modifier = modifier
+            .size(44.dp)
+            .background(Color(0xB3262626), CircleShape)
+            .semantics { contentDescription = "Share terminal log" }
+            .clickableNoRipple(onTap),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.ic_share),
+            contentDescription = null,
+            tint = TermuxKeyForeground,
+            modifier = Modifier.size(20.dp),
+        )
+    }
 }
 
 @Composable
