@@ -5,6 +5,8 @@ import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.linuxify.app.pkg.AptManager
+import com.linuxify.app.pkg.EnvCore
+import com.linuxify.app.pkg.EnvManager
 import com.linuxify.app.proj.ProjectsManager
 import com.linuxify.app.runtime.CrashReporter
 import com.linuxify.app.runtime.GuestPatches
@@ -31,6 +33,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val installer = RootfsInstaller(app)
     val runtime = LinuxRuntime(app)
     val apt = AptManager(app)
+    val env = EnvManager(app, apt)
     val projects = ProjectsManager(app)
     val services = ServiceManager(app)
 
@@ -139,6 +142,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(bgGuard) {
             installer.install()
             refreshHomeFacts()
+            // Base environment (curl + ca-certificates) is part of the DEFAULT
+            // install — the Dependency & Package Recovery Manager installs it
+            // right after the rootfs is ready. Best-effort: if it fails (e.g.
+            // offline), the Packages screen shows the pending state and the
+            // same profile can be installed with one tap later.
+            runCatching { env.installProfile(EnvCore.PROFILE_BASE.id) }
+                .onFailure { CrashReporter.logNonFatal(getApplication(), "env base install", it) }
         }
     }
 
@@ -236,13 +246,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun installPackages(vararg names: String, onDone: (AptManager.Operation) -> Unit) {
         viewModelScope.launch(bgGuard) {
-            val op = runCatching { apt.install(*names) }.getOrElse {
-                CrashReporter.logNonFatal(getApplication(), "apt install", it)
+            // Dependency & Package Recovery Manager: repair the package manager
+            // BEFORE installing anything else — but only when it is actually
+            // inconsistent (never a blind dpkg --configure -a). A probe failure
+            // must not block a plain install attempt.
+            val healthy = runCatching { env.ensureHealthyOnly() }.getOrElse {
+                CrashReporter.logNonFatal(getApplication(), "env ensureHealthyOnly", it)
+                true
+            }
+            val op = if (!healthy) {
                 AptManager.Operation(
                     AptManager.Operation.Kind.INSTALL,
                     AptManager.Operation.State.FAILED,
-                    listOf(it.message ?: it.javaClass.simpleName),
+                    listOf(env.state.value.failureHint ?: "package manager is inconsistent — repair it first (Packages > Repair package manager)"),
                 )
+            } else {
+                runCatching { apt.install(*names) }.getOrElse {
+                    CrashReporter.logNonFatal(getApplication(), "apt install", it)
+                    AptManager.Operation(
+                        AptManager.Operation.Kind.INSTALL,
+                        AptManager.Operation.State.FAILED,
+                        listOf(it.message ?: it.javaClass.simpleName),
+                    )
+                }
             }
             onDone(op)
             refreshHomeFacts()
@@ -277,6 +303,30 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(bgGuard) {
             runCatching { apt.refreshIndex() }
                 .onFailure { CrashReporter.logNonFatal(getApplication(), "apt update", it) }
+        }
+    }
+
+    // ---- Environment (Dependency & Package Recovery Manager) ----
+
+    fun checkEnvironment() {
+        viewModelScope.launch(bgGuard) {
+            runCatching { env.checkEnvironment() }
+                .onFailure { CrashReporter.logNonFatal(getApplication(), "env check", it) }
+        }
+    }
+
+    fun repairPackageManager() {
+        viewModelScope.launch(bgGuard) {
+            runCatching { env.ensureHealthyOnly() }
+                .onFailure { CrashReporter.logNonFatal(getApplication(), "env repair", it) }
+        }
+    }
+
+    fun installEnvProfile(profileId: String) {
+        viewModelScope.launch(bgGuard) {
+            runCatching { env.installProfile(profileId) }
+                .onFailure { CrashReporter.logNonFatal(getApplication(), "env install profile", it) }
+            refreshHomeFacts()
         }
     }
 

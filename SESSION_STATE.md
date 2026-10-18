@@ -1,18 +1,24 @@
 # SESSION_STATE.md — Linuxify Android
 
-Concise handoff for the next agent session. Current as of 2026-10-19 (Task 16 —
-guest prompt-warning root cause + two-layer fix, in-shell run-completion
-notifications via BEL, wakelock leak fix; v0.1.0-alpha.11). alpha.10's code
-(background running, session registry, network recovery, CLI parity audit)
-landed on main but its release step never ran — alpha.11 is the first release
-that carries it.
+Concise handoff for the next agent session. Current as of 2026-10-19 (Task 17 —
+Dependency & Package Recovery Manager: environment audit, repair-only-when-
+inconsistent, BASE/DEVELOPER tool profiles, per-tool install verification,
+IPv4 fallback on all apt ops; v0.1.0-alpha.12).
 
 ## Repository & branch
 
 - Canonical repo: https://github.com/superz1402/linuxify — branch `main`
 - Latest verified remote commit: see `git ls-remote origin main`
 - Releases:
-  - v0.1.0-alpha.11 (current) — ROOT-CAUSE fix for the "groups: cannot find
+  - v0.1.0-alpha.12 (current) — Dependency & Package Recovery Manager (see the
+    section below): one-shot environment audit, repair ONLY on real dpkg/apt
+    inconsistency (never blindly), BASE env (curl + ca-certificates) auto-
+    installed after a fresh environment install, optional DEVELOPER profile
+    (git, Node.js, npm), install-retry after fix-broken, per-tool verification
+    (binary exists AND runs), failure reporting with practical recovery
+    commands, IPv4 fallback on every apt network operation. EnvCore pure core
+    unit-tested (13 new tests, 74 total). Assets: linuxify-0.1.0-alpha.12-release.apk
+  - v0.1.0-alpha.11 — ROOT-CAUSE fix for the "groups: cannot find
     name for group ID" prompt warnings (two independent layers, host-verified
     against the real ubuntu-base tarball — see the section below); in-shell
     "command finished" notifications (guest PROMPT_COMMAND bell → app
@@ -70,6 +76,45 @@ that carries it.
   LinuxifySessionClient.onBell, and RunCompletionGate (pure, unit-tested)
   decides: notify only while the app is backgrounded, throttled to one per
   3 s. Foreground shells never buzz.
+
+## Dependency & Package Recovery Manager (alpha.12 — pkg/EnvManager.kt)
+
+- User directive: Linuxify must handle Ubuntu dependencies itself — BASE
+  environment (curl + ca-certificates) by default, optional DEVELOPER profile
+  (git, Node.js, npm), repair the package manager ONLY when actually
+  inconsistent, verify installs, report failures with a practical recovery
+  command, and use IPv4 fallback on flaky networks.
+- Architecture: `EnvCore` (pure object — profiles, audit parsing, recovery-plan
+  building, verification rules; JVM-unit-tested) + `EnvManager(ctx, apt)`
+  (runtime executor). EnvManager SHARES the AppViewModel AptManager instance so
+  every apt/dpkg write serializes on the SAME mutex — never construct a second
+  AptManager for it.
+- Audit = ONE combined proot spawn (probe script in EnvManager.PROBE_SCRIPT):
+  distro (os-release), arch (dpkg --print-architecture), free MB (df -Pm), DNS
+  probe (getent hosts deb.debian.org), interrupted dpkg (dpkg --audit output OR
+  /var/lib/dpkg/updates count), broken deps (apt-get check exit), tool presence
+  (command -v loop). Parsed by EnvCore.parseProbe — unknown lines ignored,
+  unreadable fields stay null/false (honest degradation, no crash).
+- Recovery plan (EnvCore.recoveryPlan): healthy audit ⇒ EMPTY plan (the
+  "never blind" rule). Interrupted dpkg ⇒ dpkg --configure -a; broken deps ⇒
+  apt-get --fix-broken install; both ⇒ in that order. Executed via new
+  AptManager.repairDpkg()/fixBroken() (Kind.REPAIR; Packages screen labels it
+  "package repair").
+- Install flow: audit → recover-if-needed → refresh index only if stale
+  (EnvCore.indexIsStale: no InRelease/Release file or older than 24 h) →
+  install ONLY the missing profile packages (ForceIPv4 always) → on failure:
+  fix-broken + ONE retry → verification: execInRootfs(binary, --version) per
+  tool must exit 0 with non-empty stdout → DONE, else FAILED with hint.
+- Automatic integration points: AppViewModel.startInstall() auto-installs the
+  BASE profile right after a fresh rootfs install (best-effort, offline-tolerant
+  — pending state visible on the Packages screen); AppViewModel.installPackages()
+  (search-screen installs) runs env.ensureHealthyOnly() first so ANY install
+  path repairs the package manager before using it — a probe failure does NOT
+  block a plain install attempt.
+- UI: Packages screen top card "Environment" — audit summary, health status
+  chip, repair button (shown only when unhealthy), BASE/DEVELOPER rows with
+  missing-tool lists, verification chips (✓/✗ + version line), per-step results
+  + live log box.
 
 ## THE loader rule (learned in alpha.4 — do not regress)
 
@@ -143,15 +188,19 @@ that carries it.
   (b) start a long command (e.g. `apt update`), go home → "Command finished"
   notification on completion; (c) background running: leave app minutes, come
   back → same shell with scrollback; (d) share-log icon still works.
+- Awaiting user drill for alpha.12: (e) Packages > Check environment → audit
+  card fills (distro/arch/storage/network); (f) Install Developer tools →
+  live steps, then "Verification: git ✓ (…), node ✓ (…), npm ✓ (…)"; then in
+  terminal `node -v` works; (g) search-screen install of any package when the
+  package DB is healthy → no repair detour; (h) after a FRESH environment
+  install, curl exists without manual action.
 
 ## Next exact actions
 
-1. User tests alpha.11 on device: (a) open terminal → confirm the prompt is
-   CLEAN (no "groups:" lines); (b) run something long (`apt update`), go
-   home-screen → expect a "Command finished — sh 1 is ready" notification when
-   it completes; (c) open terminal → go home → come back after minutes → same
-   shell, scrollback intact, persistent "Linuxify is running" notification;
-   (d) start a service (python http.server) → background → stop it from
-   another entry → "Run completed" notification.
-2. Candidate next features: curated tool registry UX, one-tap apt upgrade,
-   installed-packages screen, session close button ("×" on ended tabs).
+1. User tests alpha.12 on device: the alpha.11 drills (a)–(d) if not yet done,
+   plus the alpha.12 drills (e)–(h) above. OpenCode path: Packages → Developer
+   tools → Install; then in terminal `npm i -g opencode-ai` (or the official
+   installer) — Node.js/npm are the only prerequisites it needs.
+2. Candidate next features: full curated tool registry (12 presets incl.
+   OpenCode one-tap), one-tap `apt upgrade`, installed-packages screen, session
+   close button ("×" on ended tabs).

@@ -26,6 +26,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.linuxify.app.pkg.AptManager
+import com.linuxify.app.pkg.EnvCore
+import com.linuxify.app.pkg.EnvManager
 import com.linuxify.app.ui.AppViewModel
 import com.linuxify.app.ui.components.EmptyState
 import com.linuxify.app.ui.components.Status
@@ -35,13 +37,19 @@ import com.linuxify.app.ui.theme.AppType
 /**
  * Real APT package management inside the Linux userspace. Live real output only;
  * a shared lock prevents concurrent conflicting apt operations.
+ *
+ * Top section: the Dependency & Package Recovery Manager — environment audit
+ * (distro/arch/storage/network/package health), repair-only-when-inconsistent,
+ * BASE/DEVELOPER tool profiles, and per-tool install verification.
  */
 @Composable
 fun PackagesScreen(vm: AppViewModel) {
     val op by vm.apt.op.collectAsStateWithLifecycle()
+    val envState by vm.env.state.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<List<AptManager.SearchHit>>(emptyList()) }
     var searched by remember { mutableStateOf(false) }
+    val aptRunning = op?.state == AptManager.Operation.State.RUNNING
 
     Column(
         Modifier
@@ -56,6 +64,141 @@ fun PackagesScreen(vm: AppViewModel) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+
+        // ---- Environment (Dependency & Package Recovery Manager) ----
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                ) {
+                    Text("Environment", style = MaterialTheme.typography.titleMedium)
+                    StatusChip(
+                        when {
+                            envState.busy -> Status.BUSY
+                            envState.phase == EnvManager.Phase.FAILED -> Status.FAILED
+                            envState.audit?.healthy == true -> Status.READY
+                            else -> Status.STOPPED
+                        },
+                    )
+                }
+
+                val audit = envState.audit
+                if (audit == null) {
+                    Text(
+                        "Check audits the environment: Ubuntu version, architecture, free storage, network, package-manager health and installed tools.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Text(
+                        buildString {
+                            append(audit.distro ?: "unknown distro")
+                            if (audit.arch != null) append(" \u00b7 ").append(audit.arch)
+                            if (audit.freeStorageMb != null) append(" \u00b7 ").append(audit.freeStorageMb).append(" MB free")
+                            append(" \u00b7 network ").append(if (audit.networkOk) "ok" else "unavailable")
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                if (audit != null && !audit.healthy) {
+                    Text(
+                        envState.failureHint
+                            ?: "Package manager is inconsistent — repair it before installing anything.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    OutlinedButton(
+                        onClick = { vm.repairPackageManager() },
+                        enabled = !envState.busy && !aptRunning,
+                    ) { Text("Repair package manager") }
+                }
+
+                EnvCore.PROFILES.forEach { profile ->
+                    val missing = audit?.let { EnvCore.packagesFor(profile, it.installedBinaries) } ?: emptyList()
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(profile.label, style = AppType.MonoBody)
+                            Text(
+                                profile.description,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                when {
+                                    audit == null -> "tools not probed yet"
+                                    missing.isEmpty() -> "all tools installed"
+                                    else -> "missing: ${missing.joinToString(" ")}"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (audit == null) MaterialTheme.colorScheme.onSurfaceVariant
+                                else if (missing.isEmpty()) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.error,
+                            )
+                        }
+                        Button(
+                            onClick = { vm.installEnvProfile(profile.id) },
+                            enabled = !envState.busy && !aptRunning,
+                        ) {
+                            Text(if (missing.isEmpty()) "Reinstall" else "Install")
+                        }
+                    }
+                }
+
+                if (envState.verified.isNotEmpty()) {
+                    Text(
+                        "Verification: " + envState.verified.joinToString("  ") { v ->
+                            "${v.binary} ${if (v.ok) "\u2713" else "\u2717"}${v.version?.let { " ($it)" } ?: ""}"
+                        },
+                        style = AppType.MonoSmall,
+                        color = if (envState.verified.all { it.ok }) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.error,
+                    )
+                }
+
+                if (envState.phase == EnvManager.Phase.FAILED && envState.failureHint != null && audit?.healthy != false) {
+                    Text(
+                        envState.failureHint.orEmpty(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = { vm.checkEnvironment() },
+                    enabled = !envState.busy && !aptRunning,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Check environment") }
+
+                if (envState.steps.isNotEmpty() || envState.log.isNotEmpty()) {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(MaterialTheme.shapes.small)
+                            .heightIn(max = 200.dp)
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        envState.steps.forEach { s ->
+                            Text(
+                                (if (s.ok) "\u2713 " else "\u2717 ") + s.title + (s.note?.let { " ($it)" } ?: ""),
+                                style = AppType.MonoSmall,
+                                color = if (s.ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                            )
+                        }
+                        envState.log.takeLast(40).forEach { line ->
+                            Text(line, style = AppType.MonoSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        }
 
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -87,6 +230,7 @@ fun PackagesScreen(vm: AppViewModel) {
                                 AptManager.Operation.Kind.REMOVE -> "apt-get remove"
                                 AptManager.Operation.Kind.SEARCH -> "apt-cache search"
                                 AptManager.Operation.Kind.LIST_INSTALLED -> "list installed"
+                                AptManager.Operation.Kind.REPAIR -> "package repair"
                             },
                             style = AppType.MonoBody,
                         )

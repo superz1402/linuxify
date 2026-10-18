@@ -25,7 +25,7 @@ class AptManager(private val ctx: Context) {
         val output: List<String> = emptyList(),
         val exitCode: Int? = null,
     ) {
-        enum class Kind { UPDATE, INSTALL, REMOVE, SEARCH, LIST_INSTALLED }
+        enum class Kind { UPDATE, INSTALL, REMOVE, SEARCH, LIST_INSTALLED, REPAIR }
         enum class State { IDLE, RUNNING, DONE, FAILED }
     }
 
@@ -65,10 +65,25 @@ class AptManager(private val ctx: Context) {
             }
         }
 
-    suspend fun refreshIndex(): Operation = run(Operation.Kind.UPDATE, "DEBIAN_FRONTEND=noninteractive apt-get update -y")
+    suspend fun refreshIndex(): Operation =
+        run(Operation.Kind.UPDATE, "DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::ForceIPv4=true update -y")
 
     suspend fun install(vararg packages: String): Operation =
-        run(Operation.Kind.INSTALL, "DEBIAN_FRONTEND=noninteractive apt-get install -y ${packages.joinToString(" ")}")
+        run(Operation.Kind.INSTALL, "DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::ForceIPv4=true install -y ${packages.joinToString(" ")}")
+
+    /**
+     * Package recovery: finish interrupted dpkg configurations. Only ever
+     * invoked by EnvManager's recovery plan — never blindly on launch.
+     */
+    suspend fun repairDpkg(): Operation =
+        run(Operation.Kind.REPAIR, "DEBIAN_FRONTEND=noninteractive dpkg --configure -a")
+
+    /**
+     * Package recovery: repair broken dependencies (IPv4 fallback so flaky
+     * networks cannot block the repair).
+     */
+    suspend fun fixBroken(): Operation =
+        run(Operation.Kind.REPAIR, "DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::ForceIPv4=true --fix-broken install -y")
 
     suspend fun remove(vararg packages: String): Operation =
         run(Operation.Kind.REMOVE, "DEBIAN_FRONTEND=noninteractive apt-get remove -y ${packages.joinToString(" ")}")

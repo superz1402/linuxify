@@ -39,7 +39,7 @@ no meaning on the app's architecture.
 | `env` | GUEST_ENV_PRELUDE + profile.d (PS1, TMPDIR, LANG, resolv.conf 8.8.8.8/1.1.1.1) written by the installer. | **COVERED** |
 | `shell` | Terminal screen — Termux-true PTY UI: tap keyboard, pinch zoom, extra keys, long-press copy/paste, multi-session tabs, share-log button. | **COVERED** (arguably exceeds CLI) |
 | `run` | Services screen: user-defined managed commands run inside the userland, honest STARTING/RUNNING/FAILED states, port-reachability proof. | **COVERED** |
-| `update` / `upgrade` | Packages screen: `apt-get update -y`; upgrade via APT in terminal. | **PARTIAL** (no one-tap `apt upgrade` button yet) |
+| `update` / `upgrade` | Packages screen: `apt-get update -y`; ALL apt network operations carry `-o Acquire::ForceIPv4=true` (flaky-network fallback); upgrade via APT in terminal. | **PARTIAL** (no one-tap `apt upgrade` button yet) |
 | `remove` | Packages screen: `apt-get remove -y`. | **COVERED** |
 | `info` | Home screen facts card (distro, version, ABI, rootfs size, free bytes, device). | **COVERED** |
 | `config` | Settings screen (theme mode etc.). | **PARTIAL** (app exposes fewer knobs than CLI config file) |
@@ -60,7 +60,16 @@ no meaning on the app's architecture.
   exit AND for commands that finish inside a live shell while the user is away
   (guest PROMPT_COMMAND bell → app notification; foreground never buzzes).
 - Flaky-network auto-recovery: HTTP Range resume + exponential backoff + jitter +
-  checksum-verified retry on the rootfs download.
+  checksum-verified retry on the rootfs download; IPv4 fallback on every apt network
+  operation.
+- Dependency & Package Recovery Manager (alpha.12): one-shot environment audit
+  (distro, arch, free storage, DNS reachability, dpkg interrupted-ops, broken deps,
+  tool presence); package-manager repair ONLY on real evidence (`dpkg --configure -a`
+  / `apt-get --fix-broken install` — never blindly); BASE environment (curl +
+  ca-certificates) installed automatically after a fresh environment install;
+  optional DEVELOPER profile (git, Node.js, npm); install-retry after dependency
+  repair; per-tool verification that each executable exists AND runs; failure
+  reporting with the failed step plus a practical recovery command.
 - Honest state reporting (build-verified vs device-verified), global crash reporting.
 
 ## Verdict
@@ -68,7 +77,9 @@ no meaning on the app's architecture.
 Everything the CLI uses day-to-day on a phone (launch, install, shell, add/search/
 list packages, run servers, doctor/repair/fix, report) is covered by the app —
 most of it in a more integrated way. Remaining honest gaps, in priority order:
-1. Curated tool registry UX (`add` with 12 presets) — PARTIAL
+1. Curated tool registry UX (`add` with 12 presets) — PARTIAL (alpha.12's BASE/
+   DEVELOPER profiles cover the most common presets incl. the Node.js/OpenCode
+   toolchain; the full 12-preset registry remains open)
 2. One-tap `apt upgrade` — PARTIAL
 3. Visual installed-packages list — PARTIAL
 4. Snapshot/gc — DEFERRED

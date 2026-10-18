@@ -495,3 +495,22 @@ Work Log:
 Stage Summary:
 - Shipped: clean terminal prompt (two independent, host-verified fix layers), in-shell "command finished" notifications, wakelock leak fix; alpha.11 carries the previously unreleased alpha.10 feature set.
 - Honest split: reproduction + both fixes verified on the HOST against the real ubuntu-base; the on-device drill (clean prompt on the moto g85, notification on backgrounded command completion) is with the user.
+
+---
+Task ID: 17
+Agent: Z (main agent, continuation session)
+Task: User directive — build a Dependency & Package Recovery Manager: BASE env (curl, ca-certificates) by default; optional DEVELOPER profile (git, nodejs, npm); package repair ONLY when actually inconsistent (never blind dpkg --configure -a); IPv4 fallback on downloads; per-tool install verification; failure reporting with practical recovery commands.
+
+Work Log:
+- Designed and implemented pkg/EnvManager.kt: EnvCore (pure, JVM-tested: profiles, probe parsing, recovery-plan builder, staleness rule, verification rules) + EnvManager(ctx, apt) (runtime executor). EnvManager SHARES the AppViewModel AptManager instance so all apt/dpkg writes serialize on one mutex.
+- Audit = ONE combined proot spawn: distro/arch/free-mb/DNS/dpkg --audit + updates dir/apt-get check/command -v tool loop. Honest degradation: unreadable fields stay null/false, unknown lines ignored.
+- Recovery plan: healthy audit yields an EMPTY plan (the "never blind" rule); interrupted dpkg -> dpkg --configure -a; broken deps -> apt-get --fix-broken install; both -> that order.
+- AptManager: added Kind.REPAIR + repairDpkg()/fixBroken(); refreshIndex/install now carry -o Acquire::ForceIPv4=true (user-endorsed IPv4 fallback on all apt network ops).
+- Install flow: audit -> recover-if-needed -> index refresh only if stale (no InRelease/Release or >24h) -> install ONLY missing profile packages -> on failure fix-broken + ONE retry -> verify each tool via execInRootfs(binary, --version) exit 0 + non-empty stdout -> DONE else FAILED with hint. Every step failure reports title + practical recovery command.
+- Auto integration: startInstall() auto-installs BASE right after fresh rootfs install (offline-tolerant, retry via Packages screen); search-screen installPackages() runs ensureHealthyOnly() first (probe failure never blocks a plain install).
+- UI: Packages screen "Environment" card — audit summary, health chip, repair button (only when unhealthy), BASE/DEVELOPER rows with missing lists, verification chips, step list + live log.
+- 13 new unit tests (74 total) — all pass. assembleRelease clean (one Gradle daemon crash mid-build; rebuild succeeded); versionCode 12; cert 8f55e466…cca9 verified; APK in download/.
+
+Stage Summary:
+- Shipped: the Dependency & Package Recovery Manager exactly per the user's table — automatic deps where they belong, recovery only on evidence, IPv4 fallback, verification, honest failure reporting.
+- Honest split: all logic build-verified + unit-tested on server; the on-device drills (Check environment card, Developer tools install with verification chips, auto-curl after fresh install) are with the user.

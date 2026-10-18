@@ -27,7 +27,16 @@ daemon, no Termux dependency, no remote server required.
   service exits. Suppressed while you're actually watching.
 - **Recovers from flaky internet**: the rootfs download uses HTTP Range resume,
   exponential backoff with jitter (up to 8 attempts), and checksum verification before
-  anything is trusted.
+  anything is trusted; every apt operation carries an IPv4 fallback.
+- **Manages dependencies automatically** (Dependency & Package Recovery Manager):
+  audits the environment (Ubuntu version, architecture, free storage, network,
+  package-manager health, installed tools); repairs the package manager ONLY when it
+  is actually inconsistent (`dpkg --configure -a` / `apt-get --fix-broken install` —
+  never blindly on launch); installs a **BASE environment** (curl + HTTPS certificate
+  trust) by default right after the environment install; offers an optional
+  **Developer profile** (git, Node.js, npm) for JavaScript/Node work and tools such as
+  OpenCode; verifies every installed tool actually exists and runs; and reports
+  failures as the failed step plus a practical recovery command.
 - Manages **packages** through the real APT inside the userspace (search / install /
   remove / update).
 - Manages **projects** (Git clone, create, open in terminal) and **local servers**
@@ -38,7 +47,7 @@ daemon, no Termux dependency, no remote server required.
 
 ## Status
 
-Early development (v0.1.0-alpha.11). See [worklog.md](worklog.md), [SESSION_STATE.md](SESSION_STATE.md),
+Early development (v0.1.0-alpha.12). See [worklog.md](worklog.md), [SESSION_STATE.md](SESSION_STATE.md),
 [docs/CLI_PARITY.md](docs/CLI_PARITY.md) (full CLI ⇄ app feature audit) and the GitHub
 issue tracker for verified progress. What is claimed where is strictly separated into:
 **build-verified**, **host-verified**, **device-verified** — anything not labeled is not verified.
