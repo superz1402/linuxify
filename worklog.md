@@ -456,3 +456,22 @@ Work Log:
 Stage Summary:
 - Shipped: two-tap share of the full terminal log to any chat/AI app via the system share sheet.
 - Honest split: payload logic device-verified by unit tests; the on-device share-sheet drill (tap icon -> paste into an app) is with the user.
+
+---
+Task ID: 15
+Agent: Z (main agent, continuation session)
+Task: User asks — (1) docs updated everywhere to current state, (2) app must run in background (top priority), (3) internet fluctuations must auto-recover, (4) notification-bar notice when a run completes, (5) full linuxify-CLI parity check.
+
+Work Log:
+- Located the companion CLI (Bilal140202/linuxify, TypeScript on Termux+proot); cloned and enumerated all 29 command files + README command surface for the audit.
+- BACKGROUND RUNNING (the priority): built RuntimeForegroundService — FGS with persistent LOW-importance notification ("Linuxify is running"), partial wake lock (Doze freezes network/CPU with screen off otherwise; Termux's model), START_STICKY, 2-arg startForeground (targetSdk 28 needs no type), auto-release when the last session/service ends. Manifest: FOREGROUND_SERVICE + POST_NOTIFICATIONS + WAKE_LOCK + <service>.
+- Fixed the orphan-session architecture that made backgrounding leak PTYs: sessions moved from composable remember{} into process-scoped TerminalSessionRegistry (CopyOnWriteArrayList) with ONE shared LinuxifySessionClient (boundView routing + onUiInvalidated hook); TerminalScreen now reattaches to the same shell (scrollback intact) instead of respawning; the private client class was deleted from TerminalScreen.kt.
+- RUN COMPLETED NOTIFICATIONS: RuntimeNotifier with channels linuxify_runtime (persistent) / linuxify_events (completions); events only when LinuxifyApp.isInForeground == false (ActivityLifecycleCallbacks counter on Application); service exit-watcher thread posts real exit codes; user-initiated stops suppressed via userStopped flag; ic_stat_notify ">_" glyph added.
+- NETWORK AUTO-RECOVERY: downloadResumable hardened from 5 linear retries to 8 attempts with exponential backoff (2s→30s) + ±20% jitter + connection disconnect on error; Range resume + checksum verification unchanged.
+- CLI PARITY: wrote docs/CLI_PARITY.md — honest matrix of all 29 CLI commands (COVERED/PARTIAL/DEFERRED/N-A with reasons). Verdict: day-to-day phone workflow fully covered; gaps: curated tool registry UX, one-tap apt upgrade, installed-packages list, snapshot/gc, self-update, multi-distro.
+- DOCS: README "What it does"/"Status" rewritten for alpha.10 (background, notifications, network recovery, share-log, CLI_PARITY link); SESSION_STATE.md fully rewritten (release ledger, background architecture notes, rollback standing rule, on-device verification ledger, next actions).
+- v0.1.0-alpha.10: 48/48 unit tests; assembleDebug + assembleRelease clean; cert 8f55e466…cca9 verified; manifest permissions verified in the compiled APK; new classes confirmed in Kotlin output.
+
+Stage Summary:
+- Shipped: real background running (the user's top priority), completion notifications, hardened download recovery, full CLI parity audit, all docs current.
+- Honest split: everything above is build-verified + unit-tested; the on-device drills (notification appears, shell survives backgrounding, wake lock keeps servers alive) are the user's next step.

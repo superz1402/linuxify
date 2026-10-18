@@ -3,6 +3,13 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Keep the Linux userland alive in the background: foreground service with
+         a persistent notification (Termux's model), plus a partial wake lock so
+         Doze cannot freeze long downloads/servers once the screen turns off.
+         targetSdk 28: no FGS type and no runtime notification prompt required. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
         android:name=".LinuxifyApp"
@@ -31,5 +38,12 @@
             android:exported="false"
             android:excludeFromRecents="true"
             android:process=":crashreport" />
+
+        <!-- Keeps the process alive while sessions/services run. Started by
+             TerminalSessionRegistry.add / ServiceManager.start; stops itself
+             when the last live session/service ends. -->
+        <service
+            android:name=".runtime.RuntimeForegroundService"
+            android:exported="false" />
     </application>
 </manifest>

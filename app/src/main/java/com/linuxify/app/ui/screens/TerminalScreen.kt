@@ -1,11 +1,7 @@
 package com.linuxify.app.ui.screens
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.os.Build
-import android.text.TextUtils
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -36,7 +32,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -55,12 +50,12 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.linuxify.app.R
 import com.linuxify.app.terminal.PtyTerminal
+import com.linuxify.app.terminal.TerminalSessionRegistry
 import com.linuxify.app.terminal.TerminalLogShare
 import com.linuxify.app.runtime.CrashReporter
 import com.linuxify.app.ui.AppViewModel
 import com.linuxify.app.ui.components.ErrorState
 import com.termux.terminal.TerminalSession
-import com.termux.terminal.TerminalSessionClient
 import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
 import kotlin.math.roundToInt
@@ -91,7 +86,10 @@ import kotlin.math.roundToInt
 @Composable
 fun TerminalScreen(vm: AppViewModel) {
     val context = LocalContext.current
-    val sessions = remember { mutableStateListOf<TerminalSession>() }
+    // Sessions live in the PROCESS-scoped registry, not in composition state:
+    // leaving this tab (or backgrounding the whole app) no longer orphans live
+    // PTYs, and coming back reattaches to the SAME shell with its scrollback.
+    val sessions = TerminalSessionRegistry.sessions
     var selected by remember { mutableIntStateOf(0) }
     val ctrlDown = remember { mutableStateOf(false) }
     val altDown = remember { mutableStateOf(false) }
@@ -113,18 +111,12 @@ fun TerminalScreen(vm: AppViewModel) {
     }
     var spawnError by remember { mutableStateOf<String?>(null) }
 
-    val sessionClient = remember {
-        LinuxifySessionClient(
-            context = context,
-            viewProvider = { terminalView },
-            onSessionFinishedUi = { refreshTick += 1 },
-        )
-    }
+    val sessionClient = TerminalSessionRegistry.client
 
     fun spawnSession(initial: String? = null) {
         try {
             val s = PtyTerminal.newShellSession(context, sessionClient, initialCommand = initial)
-            sessions.add(s)
+            TerminalSessionRegistry.add(context, s)
             selected = sessions.size - 1
             spawnError = null
         } catch (t: Throwable) {
@@ -135,6 +127,8 @@ fun TerminalScreen(vm: AppViewModel) {
 
     LaunchedEffect(Unit) {
         if (jniError == null && sessions.isEmpty()) spawnSession()
+        // ended-session events refresh the tab labels
+        sessionClient.onUiInvalidated = { refreshTick += 1 }
     }
 
     // Raise the keyboard as soon as the view is on screen (Termux does this on
@@ -148,8 +142,10 @@ fun TerminalScreen(vm: AppViewModel) {
 
     DisposableEffect(Unit) {
         onDispose {
-            // Processes keep running by design (master prompt §6.3): closing the terminal
-            // view does NOT kill the shell. Honest about app-process death elsewhere.
+            // The composition goes away but the sessions do NOT: they keep
+            // running in the registry (kept alive in background by the
+            // foreground service). Just unbind the UI hook.
+            sessionClient.onUiInvalidated = null
         }
     }
 
@@ -226,17 +222,23 @@ fun TerminalScreen(vm: AppViewModel) {
                                         )
                                     )
                                     attachSession(session)
+                                    // Route this session's output callbacks to THIS view.
+                                    sessionClient.boundView = this
                                     terminalView = this
                                 }
                             },
                             update = { view ->
                                 if (view.mTermSession !== session) {
                                     view.attachSession(session)
+                                    sessionClient.boundView = view
                                 }
                                 // No onScreenUpdated() here: redraws are driven by session
                                 // callbacks (real-time) instead of recompositions (laggy).
                             },
-                            onRelease = { terminalView = null },
+                            onRelease = { view ->
+                                if (sessionClient.boundView === view) sessionClient.boundView = null
+                                if (terminalView === view) terminalView = null
+                            },
                             modifier = Modifier.fillMaxSize(),
                         )
 
@@ -541,88 +543,6 @@ private class LinuxifyTerminalViewClient(
     override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: TerminalSession?): Boolean = false
 
     override fun onEmulatorSet() {}
-
-    override fun logError(tag: String, message: String) {}
-
-    override fun logWarn(tag: String, message: String) {}
-
-    override fun logInfo(tag: String, message: String) {}
-
-    override fun logDebug(tag: String, message: String) {}
-
-    override fun logVerbose(tag: String, message: String) {}
-
-    override fun logStackTraceWithMessage(tag: String, message: String, e: Exception) {}
-
-    override fun logStackTrace(tag: String, e: Exception) {}
-}
-
-/**
- * TerminalSessionClient: pushes emulator output straight into the view (Termux's
- * model — output arrives on the main thread via the session's MainThreadHandler)
- * and feeds UI-only reactions (session finish) back to composition.
- */
-private class LinuxifySessionClient(
-    private val context: Context,
-    private val viewProvider: () -> TerminalView?,
-    private val onSessionFinishedUi: () -> Unit,
-) : TerminalSessionClient {
-
-    private fun redraw(changedSession: TerminalSession) {
-        val view = viewProvider() ?: return
-        if (view.mTermSession === changedSession) view.onScreenUpdated()
-    }
-
-    override fun onTextChanged(changedSession: TerminalSession) {
-        redraw(changedSession)
-    }
-
-    override fun onTitleChanged(changedSession: TerminalSession) {
-        redraw(changedSession)
-    }
-
-    override fun onSessionFinished(finishedSession: TerminalSession) {
-        onSessionFinishedUi()
-    }
-
-    /**
-     * The vendored Termux selection toolbar hands selected text here — without a
-     * real clipboard write the Copy item is a silent no-op (alpha.7 bug report).
-     * Android 13+ shows its own "copied" overlay on setPrimaryClip; older OSes
-     * get a plain toast like Termux's.
-     */
-    override fun onCopyTextToClipboard(session: TerminalSession, text: String) {
-        if (text.isEmpty()) return
-        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
-        cm.setPrimaryClip(ClipData.newPlainText("linuxify-terminal", text))
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            Toast.makeText(context, "Text copied to clipboard", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    /**
-     * The Paste toolbar item routes here; read the system clipboard and feed it
-     * through TerminalEmulator.paste (bracketed paste + escape stripping), the
-     * same path TerminalView's own paste uses.
-     */
-    override fun onPasteTextFromClipboard(session: TerminalSession) {
-        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
-        val clip = cm.primaryClip ?: return
-        val paste = clip.getItemAt(0)?.coerceToText(context) ?: return
-        if (!TextUtils.isEmpty(paste)) {
-            session.emulator?.paste(paste.toString())
-        }
-    }
-
-    override fun onBell(session: TerminalSession) {}
-
-    override fun onColorsChanged(session: TerminalSession) {
-        redraw(session)
-    }
-
-    override fun onTerminalCursorStateChange(state: Boolean) {}
-
-    override fun getTerminalCursorStyle(): Int = 0
 
     override fun logError(tag: String, message: String) {}
 

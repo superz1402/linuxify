@@ -2,7 +2,9 @@ package com.linuxify.app.srv
 
 import android.content.Context
 import com.linuxify.app.runtime.LinuxRuntime
+import com.linuxify.app.runtime.RuntimeForegroundService
 import com.linuxify.app.runtime.RuntimeDirs
+import com.linuxify.app.runtime.RuntimeNotifier
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -50,11 +52,24 @@ class ServiceManager(private val ctx: Context) {
     private val processLock = Mutex()
     private val running = HashMap<String, RunningProcess>()
 
+    companion object {
+        /** Live managed-service processes — consulted by the foreground service
+            so it cannot stop while any service still runs. */
+        @Volatile
+        var activeCount: Int = 0
+            private set
+    }
+
     private class RunningProcess(
         val process: Process,
         val output: MutableList<String> = mutableListOf(),
         val startedAtMs: Long = System.currentTimeMillis(),
-    )
+    ) {
+        /** Set when the USER stopped the service — its exit is then expected and
+            must not raise a "run completed" notification. */
+        @Volatile
+        var userStopped: Boolean = false
+    }
 
     private val defsFile: File get() = File(com.linuxify.app.runtime.RuntimeDirs.runtimeDir(ctx), "services.json")
 
@@ -153,6 +168,28 @@ class ServiceManager(private val ctx: Context) {
             }.apply { isDaemon = true }.start()
 
             synchronized(running) { running[def.id] = rp }
+            RuntimeForegroundService.start(ctx)
+            activeCount += 1
+
+            // Exit watcher: the single place that decrements activeCount. An
+            // exit the user did not cause becomes a "run completed" notification
+            // — exactly what you want after leaving the app while a server runs.
+            Thread {
+                val code = try {
+                    process.waitFor()
+                } catch (_: Exception) {
+                    return@Thread
+                }
+                activeCount = (activeCount - 1).coerceAtLeast(0)
+                if (!rp.userStopped) {
+                    RuntimeNotifier.runCompleted(
+                        ctx,
+                        title = "Run completed — ${def.name} stopped",
+                        text = "Process exited (code $code). Tap to open Linuxify.",
+                    )
+                }
+                RuntimeForegroundService.stopIfIdle(ctx)
+            }.apply { isDaemon = true }.start()
 
             // honest state: give the process a short grace period, then report reality
             Thread.sleep(600)
@@ -178,6 +215,7 @@ class ServiceManager(private val ctx: Context) {
         processLock.withLock {
             val rp = synchronized(running) { running.remove(def.id) }
             if (rp != null) {
+                rp.userStopped = true
                 try {
                     rp.process.destroy()
                     if (!rp.process.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) {
@@ -193,6 +231,7 @@ class ServiceManager(private val ctx: Context) {
     fun shutdownAll() {
         synchronized(running) {
             running.values.forEach { rp ->
+                rp.userStopped = true
                 try {
                     rp.process.destroyForcibly()
                 } catch (_: Exception) {

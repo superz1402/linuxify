@@ -422,10 +422,15 @@ class RootfsInstaller(private val ctx: Context) {
         var attempt = 0
         while (true) {
             if (cancelled) throw RuntimeError.Cancelled
-            if (attempt >= 5) throw RuntimeError.Network("gave up after $attempt attempts")
+            // Flaky-network contract: the download MUST self-recover from
+            // mid-stream stalls and drops. Range-resume picks up from the last
+            // written byte; backoff is exponential (2s,4s,8s,16s,30s,30s,30s)
+            // with ±20% jitter so a room full of retrying clients de-synchronizes.
+            if (attempt >= 8) throw RuntimeError.Network("gave up after $attempt attempts")
             attempt++
+            var conn: HttpURLConnection? = null
             try {
-                val conn = url.openConnection() as HttpURLConnection
+                conn = url.openConnection() as HttpURLConnection
                 conn.connectTimeout = 20_000
                 conn.readTimeout = 30_000
                 conn.instanceFollowRedirects = true
@@ -471,8 +476,11 @@ class RootfsInstaller(private val ctx: Context) {
             } catch (e: RuntimeError) {
                 throw e
             } catch (e: Exception) {
-                appendLog("download attempt $attempt failed: ${e.message}; will retry")
-                kotlinx.coroutines.delay(1500L * attempt)
+                runCatching { conn?.disconnect() }
+                appendLog("download attempt $attempt failed: ${e.message}; resuming in a moment")
+                val backoff = minOf(30_000L, 2_000L * (1L shl (attempt - 1)))
+                val jittered = (backoff * 0.8 + backoff * 0.4 * Math.random()).toLong()
+                kotlinx.coroutines.delay(jittered)
             }
         }
     }

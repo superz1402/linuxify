@@ -10,21 +10,36 @@ daemon, no Termux dependency, no remote server required.
 
 ## What it does
 
-- Installs a real **Ubuntu Linux userspace** locally using **proot** (unrooted, app-private).
-- Provides a **real PTY-backed terminal** with ANSI colors, scrollback, and an extra-keys row.
-- Manages **packages** through the real APT inside the userspace.
-- Manages **projects** (Git clone, create, open in terminal).
-- Runs and supervises **local servers** (loopback by default; LAN only by explicit choice).
+- Installs a real **Ubuntu Linux userspace** locally using **proot** (unrooted, app-private) —
+  staged, resumable, checksum-verified, with **automatic self-setup and self-repair**
+  (native-linker shims, exec-bit sweep, integrity re-checks, stale-marker healing).
+- Provides a **real PTY-backed terminal** (vendored Termux emulator/view) with Termux-style
+  UX: tap-to-keyboard, pinch-to-zoom, extra-keys rows, long-press Copy/Paste on the real
+  clipboard, multiple sessions, and a floating button that **shares the whole session log
+  to any chat/AI app** in two taps.
+- **Runs in the background**: a foreground service (with a silent persistent notification
+  and a partial wake lock) keeps the Linux userland alive while you're outside the app —
+  sessions and servers survive screen-off and app switches. It releases itself the moment
+  the last session/service ends.
+- **Notifies on completion**: a "run completed" notification appears when a backgrounded
+  shell session or managed service exits (suppressed while you're actually watching).
+- **Recovers from flaky internet**: the rootfs download uses HTTP Range resume,
+  exponential backoff with jitter (up to 8 attempts), and checksum verification before
+  anything is trusted.
+- Manages **packages** through the real APT inside the userspace (search / install /
+  remove / update).
+- Manages **projects** (Git clone, create, open in terminal) and **local servers**
+  (loopback by default; LAN only by explicit choice).
 - Keeps user files **persistent** across app restarts (until app uninstall / explicit reset).
 - Is **honest** about Android limitations: no kernel-level isolation, no privileged ports,
-  no guarantee that Android will keep background processes alive.
+  and no guarantee against force-stop or OEM task-manager kill lists (documented, not promised).
 
 ## Status
 
-Early development. See [worklog.md](worklog.md), [SESSION_STATE.md](SESSION_STATE.md)
-and the GitHub issue tracker for verified progress. What is claimed where is strictly
-separated into: **build-verified**, **host-verified**, **device-verified** — anything not
-labeled is not verified.
+Early development (v0.1.0-alpha.10). See [worklog.md](worklog.md), [SESSION_STATE.md](SESSION_STATE.md),
+[docs/CLI_PARITY.md](docs/CLI_PARITY.md) (full CLI ⇄ app feature audit) and the GitHub
+issue tracker for verified progress. What is claimed where is strictly separated into:
+**build-verified**, **host-verified**, **device-verified** — anything not labeled is not verified.
 
 ## Build
 
