@@ -1,10 +1,15 @@
 package com.linuxify.app.ui.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.os.Build
+import android.text.TextUtils
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.InputMethodManager
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -97,6 +102,7 @@ fun TerminalScreen(vm: AppViewModel) {
 
     val sessionClient = remember {
         LinuxifySessionClient(
+            context = context,
             viewProvider = { terminalView },
             onSessionFinishedUi = { refreshTick += 1 },
         )
@@ -486,6 +492,7 @@ private class LinuxifyTerminalViewClient(
  * and feeds UI-only reactions (session finish) back to composition.
  */
 private class LinuxifySessionClient(
+    private val context: Context,
     private val viewProvider: () -> TerminalView?,
     private val onSessionFinishedUi: () -> Unit,
 ) : TerminalSessionClient {
@@ -507,9 +514,34 @@ private class LinuxifySessionClient(
         onSessionFinishedUi()
     }
 
-    override fun onCopyTextToClipboard(session: TerminalSession, text: String) {}
+    /**
+     * The vendored Termux selection toolbar hands selected text here — without a
+     * real clipboard write the Copy item is a silent no-op (alpha.7 bug report).
+     * Android 13+ shows its own "copied" overlay on setPrimaryClip; older OSes
+     * get a plain toast like Termux's.
+     */
+    override fun onCopyTextToClipboard(session: TerminalSession, text: String) {
+        if (text.isEmpty()) return
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+        cm.setPrimaryClip(ClipData.newPlainText("linuxify-terminal", text))
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            Toast.makeText(context, "Text copied to clipboard", Toast.LENGTH_SHORT).show()
+        }
+    }
 
-    override fun onPasteTextFromClipboard(session: TerminalSession) {}
+    /**
+     * The Paste toolbar item routes here; read the system clipboard and feed it
+     * through TerminalEmulator.paste (bracketed paste + escape stripping), the
+     * same path TerminalView's own paste uses.
+     */
+    override fun onPasteTextFromClipboard(session: TerminalSession) {
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+        val clip = cm.primaryClip ?: return
+        val paste = clip.getItemAt(0)?.coerceToText(context) ?: return
+        if (!TextUtils.isEmpty(paste)) {
+            session.emulator?.paste(paste.toString())
+        }
+    }
 
     override fun onBell(session: TerminalSession) {}
 

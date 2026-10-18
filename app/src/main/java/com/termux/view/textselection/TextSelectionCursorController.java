@@ -30,7 +30,6 @@ public class TextSelectionCursorController implements CursorController {
     private ActionMode mActionMode;
     private final int ACTION_COPY = 1;
     private final int ACTION_PASTE = 2;
-    private final int ACTION_MORE = 3;
 
     public TextSelectionCursorController(TerminalView terminalView) {
         this.terminalView = terminalView;
@@ -114,7 +113,9 @@ public class TextSelectionCursorController implements CursorController {
                 ClipboardManager clipboard = (ClipboardManager) terminalView.getContext().getSystemService(Context.CLIPBOARD_SERVICE);
                 menu.add(Menu.NONE, ACTION_COPY, Menu.NONE, R.string.copy_text).setShowAsAction(show);
                 menu.add(Menu.NONE, ACTION_PASTE, Menu.NONE, R.string.paste_text).setEnabled(clipboard.hasPrimaryClip()).setShowAsAction(show);
-                menu.add(Menu.NONE, ACTION_MORE, Menu.NONE, R.string.text_selection_more);
+                // Linuxify: upstream also adds a "More…" item that calls showContextMenu(),
+                // but TerminalView registers no context-menu listener, so that item was a
+                // dead control — removed instead of shipping a button that can do nothing.
                 return true;
             }
 
@@ -132,17 +133,17 @@ public class TextSelectionCursorController implements CursorController {
 
                 switch (item.getItemId()) {
                     case ACTION_COPY:
-                        String selectedText = terminalView.mEmulator.getSelectedText(mSelX1, mSelY1, mSelX2, mSelY2).trim();
-                        terminalView.mTermSession.onCopyTextToClipboard(selectedText);
+                        // Linuxify: getSelectedText() returns null for a degenerate/empty
+                        // selection — trim() on that crashed the whole app (alpha.7 report).
+                        String selectedText = terminalView.mEmulator.getSelectedText(mSelX1, mSelY1, mSelX2, mSelY2);
+                        if (selectedText != null) {
+                            terminalView.mTermSession.onCopyTextToClipboard(selectedText.trim());
+                        }
                         terminalView.stopTextSelectionMode();
                         break;
                     case ACTION_PASTE:
                         terminalView.stopTextSelectionMode();
                         terminalView.mTermSession.onPasteTextFromClipboard();
-                        break;
-                    case ACTION_MORE:
-                        terminalView.stopTextSelectionMode(); //we stop text selection first, otherwise handles will show above popup
-                        terminalView.showContextMenu();
                         break;
                 }
 
