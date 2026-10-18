@@ -379,3 +379,26 @@ Toolchain (Issue #1):
     drill) is the user's next step and closes issue #3.
 - Artifacts: linuxify-0.1.0-alpha.4-release.apk / linuxify-0.1.0-alpha.4-debug.apk
   (GitHub release v0.1.0-alpha.4 + build outputs).
+
+
+---
+Task ID: 9
+Agent: Z (main agent, continuation session)
+Task: Fix on-device crash: after a successful install ("Linuxify ready"), tapping Terminal / Projects / Services crashed the app ("keeps stopping"). No logcat available from the user.
+
+Work Log:
+- Synced repo to origin/main @ fff3761 (alpha.4) and verified the RELEASED APKs byte-level: all shipped alphas contain their native libs (alpha.4: 6 arm64 libs incl. libproot-loader.so) — packaging was NOT the problem; the user's install genuinely passed exec verification.
+- Read every screen on the three crashing paths + vendored TerminalSession/JNI + managers. Static analysis found no deterministic fault for Projects/Services (0 projects -> no proot call at all), so the exact root cause is only observable on the device.
+- Decision (per zero-opaque-errors mandate): make the app self-diagnosing instead of shipping another blind fix. Shipped in alpha.5:
+  * CrashReporter (global UncaughtExceptionHandler): renders trace with app/device context, persists to files/runtime/logs/last-crash.txt, opens CrashReportActivity (plain-Android, :crashreport process, Compose-free so it draws even when Compose crashes) with Copy + Restart buttons; exits without the system dialog when reporting succeeded.
+  * TerminalScreen: pre-loads libtermux.so in a guarded remember{} (load failure -> honest on-screen error), wraps session spawn in try/catch -> ErrorState + Retry instead of crash.
+  * AppViewModel: CoroutineExceptionHandler (bgGuard) on every launch; runCatching on all manager calls (projects/services/apt/home facts) — background errors log nonfatal + surface as UI messages, never kill the process.
+  * Ready-gate hardening: MainActivity requires ready marker AND proot+loader binaries; RootfsInstaller clears stale markers and auto-repairs; SetupScreen Ready branch repairs when binaries are missing.
+  * HomeScreen: "Runtime binaries" fact row (ok / missing — reinstall required).
+- Build env on this host: Android SDK (platform-35, build-tools 35.0.0) + Temurin JDK 21 (system JRE lacks jlink).
+- Verification: :app:testDebugUnitTest 37/37 PASS; assembleRelease + assembleDebug SUCCESS; APK content verified (6 arm64 libs incl. libproot + libproot-loader); apksigner cert SHA-256 8f55e466... == alpha.4 cert (overwrite install works, no uninstall).
+- Honest limitation: still no device/emulator on this host — the crash's exact stack will be produced by the crash reporter on the user's device on first reproduction.
+
+Stage Summary:
+- Deliverable: linuxify v0.1.0-alpha.5 (release + debug APKs, stable signing, versionCode 5).
+- Next device drill: install alpha.5 over alpha.4 -> tap Terminal/Projects/Services. If any screen still fails, the app now shows the FULL stack trace in-app with a Copy button — paste it into the chat for a pinpoint fix.

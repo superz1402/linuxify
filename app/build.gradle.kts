@@ -41,8 +41,8 @@ android {
         // approach Termux, UserLAnd and every proot-based Android app uses.
         // compileSdk stays 35 so we keep modern toolchain/API availability.
         targetSdk = 28
-        versionCode = 4
-        versionName = "0.1.0-alpha.4"
+        versionCode = 5
+        versionName = "0.1.0-alpha.5"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

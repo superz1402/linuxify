@@ -22,6 +22,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -58,8 +59,19 @@ fun SetupScreen(vm: AppViewModel, onInstalled: () -> Unit) {
     ) {
         when (val s = state) {
             is com.linuxify.app.runtime.RootfsInstaller.InstallState.Ready -> {
-                // Brief transition state; nav effect handles movement.
-                onInstalled()
+                if (vm.runtimeBinariesOk()) {
+                    // Brief transition state; nav effect handles movement.
+                    onInstalled()
+                } else {
+                    // Stale ready marker without usable native binaries: repair
+                    // immediately (the downloaded archive is reused, so this is
+                    // extraction + verification only, not a re-download).
+                    LaunchedEffect(Unit) { vm.startInstall() }
+                    Text(
+                        "Repairing the Linux runtime…",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
             }
             is com.linuxify.app.runtime.RootfsInstaller.InstallState.Failed -> FailedView(s, vm, log)
             is com.linuxify.app.runtime.RootfsInstaller.InstallState.Downloading,

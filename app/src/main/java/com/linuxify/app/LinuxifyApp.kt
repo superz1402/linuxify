@@ -1,10 +1,13 @@
 package com.linuxify.app
 
 import android.app.Application
+import com.linuxify.app.runtime.CrashReporter
 
 class LinuxifyApp : Application() {
-    // The AppViewModel owns runtime managers. When Android kills the app process,
-    // child proot processes are terminated by the OS process-group teardown in
-    // most cases; --kill-on-exit additionally guarantees tracees die with proot.
-    // This is documented honestly in docs/RUNTIME.md.
+    override fun onCreate() {
+        super.onCreate()
+        // Any uncaught exception must present as an in-app, copyable report —
+        // never as a silent "app keeps stopping" dialog (zero-opaque-errors).
+        CrashReporter.install(this)
+    }
 }

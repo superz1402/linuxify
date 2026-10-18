@@ -83,9 +83,17 @@ class RootfsInstaller(private val ctx: Context) {
         cancelled = false
         try {
             if (isReadyMarkerPresent()) {
-                val ready = InstallState.Ready(RuntimeMetadata.DISTRO_NAME, RuntimeMetadata.DISTRO_VERSION)
-                _state.value = ready
-                return@withContext Result.success(ready)
+                // A ready marker is only trustworthy while the packaged native
+                // runtime is still present (e.g. after an app update). If the
+                // binaries vanished, the marker is stale: clear it and reinstall
+                // instead of presenting a runtime that cannot spawn anything.
+                if (RuntimeDirs.prootAvailable(ctx) && RuntimeDirs.prootLoaderAvailable(ctx)) {
+                    val ready = InstallState.Ready(RuntimeMetadata.DISTRO_NAME, RuntimeMetadata.DISTRO_VERSION)
+                    _state.value = ready
+                    return@withContext Result.success(ready)
+                }
+                appendLog("install marker present but native runtime binaries are missing — clearing stale marker and reinstalling")
+                RuntimeDirs.installMarker(ctx).delete()
             }
 
             _state.value = InstallState.Checking

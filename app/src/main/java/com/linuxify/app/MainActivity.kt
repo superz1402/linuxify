@@ -88,9 +88,13 @@ fun LinuxifyRoot(vm: AppViewModel = viewModel()) {
     val currentRoute = backStack?.destination?.route ?: "home"
 
     // Installer gate: when runtime is not ready, show setup instead of main UI.
+    // A ready marker alone is not enough — the packaged native binaries must be
+    // present too (an update that lost them, or a corrupt state, must route to
+    // setup and self-heal, never into screens that would crash on spawn).
     val installState by vm.installer.state.collectAsStateWithLifecycle()
-    val runtimeReady = installState is com.linuxify.app.runtime.RootfsInstaller.InstallState.Ready ||
-        vm.installer.isReadyMarkerPresent()
+    val runtimeReady =
+        (installState is com.linuxify.app.runtime.RootfsInstaller.InstallState.Ready ||
+            vm.installer.isReadyMarkerPresent()) && vm.runtimeBinariesOk()
 
     if (!runtimeReady) {
         SetupScreen(vm = vm, onInstalled = { vm.refreshHomeFacts() })

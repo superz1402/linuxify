@@ -31,7 +31,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
 import androidx.compose.material3.ExperimentalMaterial3Api
 import com.linuxify.app.terminal.PtyTerminal
+import com.linuxify.app.runtime.CrashReporter
 import com.linuxify.app.ui.AppViewModel
+import com.linuxify.app.ui.components.ErrorState
 import com.linuxify.app.ui.theme.AppType
 import com.linuxify.app.ui.theme.TerminalBackground
 import com.termux.terminal.TerminalSession
@@ -52,17 +54,36 @@ fun TerminalScreen(vm: AppViewModel) {
     var altDown by remember { mutableStateOf(false) }
     var refreshTick by remember { mutableStateOf(0) }
 
+    // Load the terminal engine HERE, in a guarded context: a load failure must
+    // become an honest on-screen error, not an UnsatisfiedLinkError inside the
+    // first layout pass (the classic silent "app keeps stopping").
+    val jniError = remember {
+        try {
+            System.loadLibrary("termux")
+            null
+        } catch (t: Throwable) {
+            CrashReporter.logNonFatal(context, "loadLibrary(termux)", t)
+            t
+        }
+    }
+    var spawnError by remember { mutableStateOf<String?>(null) }
+
     val sessionClient = remember { LinuxifySessionClient { refreshTick++ } }
 
-    fun spawnSession(initial: String? = null): TerminalSession {
-        val s = PtyTerminal.newShellSession(context, sessionClient, initialCommand = initial)
-        sessions.add(s)
-        selected = sessions.size - 1
-        return s
+    fun spawnSession(initial: String? = null) {
+        try {
+            val s = PtyTerminal.newShellSession(context, sessionClient, initialCommand = initial)
+            sessions.add(s)
+            selected = sessions.size - 1
+            spawnError = null
+        } catch (t: Throwable) {
+            CrashReporter.logNonFatal(context, "spawnSession", t)
+            spawnError = t.message ?: t.javaClass.simpleName
+        }
     }
 
     LaunchedEffect(Unit) {
-        if (sessions.isEmpty()) spawnSession()
+        if (jniError == null && sessions.isEmpty()) spawnSession()
     }
 
     DisposableEffect(Unit) {
@@ -77,6 +98,24 @@ fun TerminalScreen(vm: AppViewModel) {
             .fillMaxSize()
             .background(TerminalBackground),
     ) {
+        when {
+            jniError != null -> {
+                ErrorState(
+                    title = "Terminal engine unavailable",
+                    body = "The terminal's native engine (libtermux.so) failed to load: " +
+                        "${jniError.message ?: jniError.javaClass.simpleName}. " +
+                        "Reinstall the latest Linuxify APK — if this persists, copy the crash report and report it.",
+                )
+            }
+            spawnError != null && sessions.isEmpty() -> {
+                ErrorState(
+                    title = "Could not start shell",
+                    body = "The Linux shell failed to start: $spawnError",
+                    actionLabel = "Retry",
+                    onAction = { spawnError = null; spawnSession() },
+                )
+            }
+            else -> {
         if (sessions.size > 1) {
             SecondaryScrollableTabRow(
                 selectedTabIndex = selected.coerceIn(0, sessions.size - 1),
@@ -147,6 +186,8 @@ fun TerminalScreen(vm: AppViewModel) {
             },
             onNewSession = { spawnSession() },
         )
+            }
+        }
     }
 }
 

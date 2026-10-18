@@ -95,6 +95,7 @@ fun HomeScreen(
                     StatusChip(Status.READY)
                 }
                 FactRow("Architecture", f.abi)
+                FactRow("Runtime binaries", if (f.prootOk && f.loaderOk) "ok (proot + ELF loader)" else "missing — reinstall required")
                 FactRow("Environment size", LinuxRuntime.humanSize(f.rootfsSizeBytes))
                 FactRow("Packages installed", f.installedPackages?.toString() ?: "—")
                 FactRow("Free storage", LinuxRuntime.humanSize(f.freeBytes))

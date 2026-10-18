@@ -22,5 +22,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Crash report screen: plain-Android (no Compose) so it can still draw
+             when the crash is inside the Compose stack. Started only by the
+             CrashReporter handler. -->
+        <activity
+            android:name=".runtime.CrashReportActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:process=":crashreport" />
     </application>
 </manifest>
