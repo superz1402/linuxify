@@ -1,8 +1,41 @@
 # SESSION_STATE.md — Linuxify Android
 
-Concise handoff for the next agent session. Current as of 2026-10-19 (Task 19 —
-alpha.13 audit & hardening: full code audit of the Universal Software Management
-System, 8 issues filed (#13-#20) and ALL fixed with tests; v0.1.0-alpha.14).
+Concise handoff for the next agent session. Current as of 2026-10-19 (Task 20 —
+closed-source APK licensing & distribution audit, GitHub issue #21, branch
+`audit/proprietary-distribution`).
+
+## ACTIVE TASK — issue #21: licensing & distribution audit
+
+- Question: can Linuxify ship as a proprietary closed-source APK with the
+  Kotlin/Compose source private? Evidence-driven audit mandated by the user.
+- Branch: `audit/proprietary-distribution` (from main @ c0ec30d). Issue: #21.
+- ESTABLISHED FACTS (primary-source verified, see worklog Task 20):
+  - Vendored com/termux Java: 17/20 files byte-identical to termux-app v0.118.0,
+    3 files with small Linuxify patches. Upstream v0.118.0 LICENSE.md says
+    "GPLv3 only" (the Apache-2.0 bullet documents the jackpal ORIGIN of the
+    terminal code, it is not a regrant). GitHub licence detection: NOASSERTION.
+  - libtermux.so: prebuilt JNI from the official termux-app v0.118.0 release
+    APK; loaded IN-PROCESS (System.loadLibrary("termux")); GPL-3.0.
+  - Linuxify Kotlin imports/extends com.termux.* directly (PtyTerminal,
+    TerminalSessionRegistry, TerminalScreen) → APK is a GPL combined work.
+  - proot (libproot.so + libproot-loader.so): GPL-2.0-OR-LATER (source headers
+    at pinned tag v5.1.107.96); exec'd as a SEPARATE executable (fork/exec,
+    arm's-length) → aggregation, not linking. Binaries MODIFIED post-build
+    (DT_NEEDED rewrite via tools/patch_elf_needed.py — corresponding-source
+    material must ship with distribution).
+  - libtalloc.so: LGPL-3.0 (talloc 2.5.0 tarball LICENSE; Termux metadata
+    "GPL-3.0" is imprecise). libshmem.so: BSD-3-Clause. Linked by proot only.
+  - Ubuntu rootfs: NOT bundled — downloaded at runtime from cdimage.ubuntu.com
+    (SHA-256-pinned) → the app developer never conveys it; no obligations flow
+    to Linuxify's own code from rootfs contents.
+  - Gradle deps: Apache-2.0 across the board (test-only junit/org.json aside).
+- Working verdict (to be written up in docs/PROPRIETARY_DISTRIBUTION_AUDIT.md):
+  B — proprietary APK FEASIBLE WITH SPECIFIC CHANGES. The blocker is ONLY the
+  in-process GPL terminal stack (vendored Java + libtermux.so). Current public
+  releases are GPL-3.0-or-later per README and stay GPL-distributed.
+- Known compliance gaps (fixing in this task): no LICENSE file at repo root;
+  docs/RUNTIME.md "proot: GPLv3+" is wrong (GPL-2.0-or-later); no distribution-
+  facing third-party notices/source-offer document; no in-app notices surface.
 
 ## Repository & branch
 

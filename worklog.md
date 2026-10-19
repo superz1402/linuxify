@@ -557,3 +557,13 @@ Stage Summary:
 - All 8 audit issues (#13-#20) closed with verified fixes; suite grew 101 -> 119, 0 failures; release-blocking defect = the always-broken APT search.
 - alpha.13's published release is left untouched (traceability rule); the fixes ship as a NEW v0.1.0-alpha.14 release.
 - Still with the user (device drills): alpha.12 (e)-(h), alpha.13 (i)-(vi) plus alpha.14 additions — search actually returns results now, APT card shows upgrade feedback.
+
+---
+Task ID: 20
+Agent: Z (main agent, continuation session)
+Task: Closed-source APK licensing & distribution audit (issue #21) — establish the actual licensing position from repository evidence; produce docs/PROPRIETARY_DISTRIBUTION_AUDIT.md; implement only clearly-required compliance changes.
+
+Work Log:
+- Phase 0 git audit: main @ c0ec30d == origin/main, tree clean, 0 divergence; created branch audit/proprietary-distribution and pushed it; issue #21 created BEFORE any implementation.
+- Phase 1 licence facts (all from primary sources): vendored com/termux = 20 files, 17 byte-identical to termux-app v0.118.0, 3 with small Linuxify patches (TerminalView null-guard, 2 R-import namespace changes) — upstream v0.118.0 LICENSE.md (copied verbatim into docs/THIRD_PARTY_TERMUX_LICENSE.md) says "GPLv3 only" with an Apache-2.0 ORIGIN note for the terminal libraries (GitHub licence detection: NOASSERTION); no per-file licence headers upstream. libtermux.so = prebuilt JNI extracted from the official termux-app v0.118.0 release APK (GPL-3.0), loaded IN-PROCESS via System.loadLibrary. proot = GPL-2.0-or-later (termux-packages build.sh "GPL-2.0" + source headers "version 2 ... or (at your option) any later version" at pinned tag v5.1.107.96) — docs/RUNTIME.md's "GPLv3+" claim is WRONG, will be corrected. libtalloc 2.5.0 = LGPL-3.0 (talloc tarball LICENSE; sha256 912afa23… matches the Termux build input; Termux metadata says GPL-3.0 — imprecise). libandroid-shmem 0.7 = BSD-3-Clause (upstream repo + package metadata). Ubuntu rootfs NOT bundled — downloaded at runtime from cdimage.ubuntu.com, SHA-256-pinned. Gradle deps all Apache-2.0 (androidx/kotlin/coroutines/commons-compress); junit/org.json test-only.
+- Phase 2 integration analysis: Linuxify Kotlin (PtyTerminal/TerminalSessionRegistry/TerminalScreen) directly imports and instantiates com.termux.* classes; libtermux.so is the sole in-process JNI. proot is exec'd as a SEPARATE executable via ProcessBuilder/fork+exec (arm's-length argv/env/fds) — aggregation, not linking. No assets dir; nothing GPL bundled except the terminal stack.
