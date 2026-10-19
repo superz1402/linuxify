@@ -240,4 +240,39 @@ class SoftwareCatalogTest {
         assertEquals(emptyList<CatalogEntry>(), CustomTools.fromJson("not json at all"))
         assertEquals(emptyList<CatalogEntry>(), CustomTools.fromJson("[]"))
     }
+
+    @Test
+    fun `fromJson re-validates and drops entries with unsafe fields — issue 14`() {
+        val handEdited = """
+            [
+              {"id":"ok1","name":"ok1","ecosystem":"apt","pkg":"sl","verifyBinary":"sl"},
+              {"id":"evil1","name":"evil","ecosystem":"apt","pkg":"curl","verifyBinary":"curl; rm -rf /"},
+              {"id":"evil2","name":"evil2","ecosystem":"pip","pkg":"$(touch /tmp/pwned)","verifyBinary":"x"},
+              {"id":"evil3","name":"evil3","ecosystem":"curl | bash","pkg":"x","verifyBinary":"x"},
+              {"id":"evil4","name":"evil4","ecosystem":"npm","pkg":"@a/b","binary":"bad name","verifyBinary":"x"},
+              {"id":"evil5","name":"evil5","ecosystem":"npm","pkg":"a`id`","verifyBinary":"a"}
+            ]
+        """.trimIndent()
+        val loaded = CustomTools.fromJson(handEdited)
+        assertEquals(listOf("ok1"), loaded.map { it.id })
+    }
+
+    @Test
+    fun `valid custom tools survive the fromJson re-validation`() {
+        val e1 = CustomTools.buildEntry("tool-one", "pip", "yt-dlp", null, null) {}!!
+        val e2 = CustomTools.buildEntry("ni", "npm", "@antfu/ni", "ni", null) {}!!
+        val back = CustomTools.fromJson(CustomTools.toJson(listOf(e1, e2)))
+        assertEquals(listOf("tool-one", "ni"), back.map { it.id })
+        assertEquals("@antfu/ni", (back[1].specs.first() as InstallSpec.Npm).pkg)
+    }
+
+    @Test
+    fun `probe script refuses to interpolate unsafe binary names — issue 14`() {
+        val script = Ecosystems.installedProbeScript(listOf("htop", "bad;name", "rg", "`touch x`", "\$(id)"))
+        assertTrue(script.contains("command -v htop"))
+        assertTrue(script.contains("command -v rg"))
+        assertFalse(script.contains("bad;name"))
+        assertFalse(script.contains("`"))
+        assertFalse(script.contains("$("))
+    }
 }

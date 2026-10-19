@@ -16,15 +16,14 @@ object CustomTools {
     val SUPPORTED_ECOSYSTEMS: List<String> = listOf(Ecosystems.APT, Ecosystems.NPM, Ecosystems.PIP)
 
     private val ID_RE = Regex("^[a-z0-9][a-z0-9._-]{0,63}$")
-    private val PKG_RE = Regex("^[A-Za-z0-9][A-Za-z0-9.@/_+-]{0,127}$")
 
     /** npm scoped packages (@scope/name) — issue #20: a leading '@' is legal for npm only. */
     private val NPM_SCOPE_RE = Regex("^@[A-Za-z0-9][A-Za-z0-9.@/_+-]{0,126}$")
 
     /** Is [pkg] a package name the given ecosystem accepts (injection-safe by charset)? */
     fun isAllowedPackage(ecosystem: String, pkg: String): Boolean = when (ecosystem) {
-        Ecosystems.NPM -> PKG_RE.matches(pkg) || NPM_SCOPE_RE.matches(pkg)
-        else -> PKG_RE.matches(pkg)
+        Ecosystems.NPM -> Ecosystems.isSafeToken(pkg) || NPM_SCOPE_RE.matches(pkg)
+        else -> Ecosystems.isSafeToken(pkg)
     }
 
     /**
@@ -57,7 +56,7 @@ object CustomTools {
             return null
         }
         val binary = rawBinary?.trim()?.takeIf { it.isNotEmpty() }
-        if (binary != null && !PKG_RE.matches(binary)) {
+        if (binary != null && !Ecosystems.isSafeToken(binary)) {
             error("Binary name contains characters that are not valid for an executable name.")
             return null
         }
@@ -117,6 +116,15 @@ object CustomTools {
             val pkg = o.optString("pkg")
             if (pkg.isEmpty()) return@mapNotNull null
             val binary = o.optString("binary").takeIf { it.isNotEmpty() }
+            val verifyBinary = o.optString("verifyBinary").ifEmpty { binary ?: pkg }
+            // Issue #14 — re-validate EVERYTHING read back from disk. The file
+            // lives in app-private storage, but a corrupt or hand-edited file
+            // must never feed unvalidated strings into guest shell commands.
+            // Entries failing validation are skipped, not trusted.
+            if (eco !in SUPPORTED_ECOSYSTEMS) return@mapNotNull null
+            if (!isAllowedPackage(eco, pkg)) return@mapNotNull null
+            if (binary != null && !Ecosystems.isSafeToken(binary)) return@mapNotNull null
+            if (verifyBinary.isEmpty() || !isAllowedPackage(eco, verifyBinary)) return@mapNotNull null
             val spec: InstallSpec = when (eco) {
                 Ecosystems.APT -> InstallSpec.Apt(listOf(pkg))
                 Ecosystems.NPM -> InstallSpec.Npm(pkg, binary ?: pkg)
@@ -129,7 +137,7 @@ object CustomTools {
                 description = o.optString("description").ifEmpty { "Custom tool." },
                 category = "Custom",
                 specs = listOf(spec),
-                verifyBinary = o.optString("verifyBinary").ifEmpty { binary ?: pkg },
+                verifyBinary = verifyBinary,
                 verifyArg = o.optString("verifyArg").ifEmpty { "--version" },
                 custom = true,
             )

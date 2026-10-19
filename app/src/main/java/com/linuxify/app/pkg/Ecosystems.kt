@@ -42,6 +42,16 @@ object Ecosystems {
     const val PIP = "pip"
     const val BINARY = "binary"
 
+    /**
+     * Charset a package/binary identifier may contain — no shell
+     * metacharacters, no whitespace, no leading '@' (that is an npm-scope
+     * privilege, see [CustomTools.isAllowedPackage]). Every string that ever
+     * reaches a shell command line must pass this (issue #14).
+     */
+    val SAFE_TOKEN_RE: Regex = Regex("^[A-Za-z0-9][A-Za-z0-9.@/_+-]{0,127}$")
+
+    fun isSafeToken(token: String): Boolean = SAFE_TOKEN_RE.matches(token)
+
     fun labelOf(spec: InstallSpec): String = when (spec) {
         is InstallSpec.Apt -> "APT"
         is InstallSpec.Npm -> "npm"
@@ -120,7 +130,7 @@ object Ecosystems {
     /** Combined one-spawn probe: `b:<binary>=yes|no` lines for catalog state. */
     fun installedProbeScript(binaries: Collection<String>): String =
         binaries
-            .filter { it.isNotBlank() }
+            .filter { it.isNotBlank() && isSafeToken(it) }
             .distinct()
             .joinToString("\n") { b ->
                 "if command -v $b >/dev/null 2>&1; then echo \"b:$b=yes\"; else echo \"b:$b=no\"; fi"
