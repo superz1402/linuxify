@@ -9,7 +9,10 @@ System, 8 issues filed (#13-#20) and ALL fixed with tests; v0.1.0-alpha.14).
 - Canonical repo: https://github.com/superz1402/linuxify — branch `main`
 - Latest verified remote commit: see `git ls-remote origin main`
 - Releases:
-  - v0.1.0-alpha.14 (current) — alpha.13 audit & hardening: 8 issues (#13-#20)
+  - v0.1.0-alpha.14 (current) — release id 416937021, tag on f1efcf9.
+    APK SHA-256 f33684a07c73f1df6ecb7d07a85c63d4454ab209e9f9fa0d7cb9c7e65703ccf8
+    (published asset verified byte-identical to the local build; cert
+    8f55e466…cca9). Content: alpha.13 audit & hardening: 8 issues (#13-#20)
     fixed with tests. Headline: APT search WORKS again (Regex.escape's PCRE
     \Q…\E was never valid glibc ERE, so every ordinary search returned "No
     results" — #13); APT operations (upgrade/repair/search-install) show their
