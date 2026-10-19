@@ -533,3 +533,27 @@ Work Log:
 
 Stage Summary:
 - Shipped: the Universal Software Management System — shared core, four ecosystem adapters, searchable catalog, custom tools, one-tap upgrade, unrestricted terminal. Build+unit verified on server; the six on-device drills (catalog install, npm auto-prereq via OpenCode, sha256 binary path, upgrade, custom tool, manual terminal installs) are with the user.
+
+---
+Task ID: 19
+Agent: Z (main agent, continuation session)
+Task: Alpha.13 continuation, git audit & release verification — establish real repo state, audit the Universal Software Management System implementation against the actual code, use GitHub issues as the task ledger, fix + verify incrementally, verify release artifacts.
+
+Work Log:
+- PHASE 1 (git audit): branch main; HEAD 7e5a553e == origin/main (in sync after fetch); 0 local-only / 0 remote-only commits; working tree clean (no staged/unstaged/untracked); stash@{0} "stale-worktree-backup-pre-alpha4" preserved untouched. All 13 releases + 13 tags verified via API (alpha.13 release id 416902540, asset linuxify-0.1.0-alpha.13-release.apk 12,514,586 bytes, uploaded). No incomplete prior-session work found.
+- PHASE 2 (code audit): read SoftwareManager/Ecosystems/Catalog/CustomTools/SoftwareScreen/AppViewModel/AptManager/EnvManager + LinuxRuntime exec layer + all 101 tests. Baseline: testDebugUnitTest 101/101 PASS. Checklist result: PASS for shared orchestration, 4 adapters, sha256 pinning, arch gating, PEP 668, root assumptions, non-false-positive success paths, terminal preservation. 8 defects found and filed (below).
+- PHASE 3 (issue ledger): created issues #13-#20 (no duplicates existed; #3 remains open/blocked as the standing device-verification issue).
+- #13 FIXED (d7c5acd): AptManager.search built its apt-cache ERE with Regex.escape -> PCRE \Q…\E, which glibc ERE reads as literal Q…E; EVERY ordinary search returned "No results". Host-verified against the same regex engine (grep -E '^htop|htop' matches; '^g\+\+|g\+\+' matches). New pure AptCommands.ereQuote/safeSearchTerm/searchCommand + hasInstalledStatus; isInstalled() rebuilt as argv exec (execInRootfs dpkg -s) — the old form was always-false AND a latent injection hazard. +10 tests.
+- #20 FIXED (629b3bc): npm scoped packages @scope/pkg accepted for npm custom tools only; apt/pip still reject leading '@'; charset stays injection-safe. +1 test.
+- #14 FIXED (cf86fe9): CustomTools.fromJson re-validates everything read from custom_tools.json (ecosystem whitelist + package/binary charset) and SKIPS invalid entries; Ecosystems.SAFE_TOKEN_RE is the single shared identifier rule; installedProbeScript refuses to interpolate unsafe names (defense in depth). Hostile-JSON tests with ; $( ) ` variants. +3 tests.
+- #18 FIXED (ec188b5): binary removal idempotent — absent file is success (old delete()&&short-circuit reported false failure).
+- #19 FIXED (73f82e9): verify-failure hint shows the REAL exit code (VerifyResult.exitCode added, set in both managers); version line reported separately as "Last output:". Note: the SoftwareManager-side of #19 rode in commit ec188b5 (both edits were in the same working file when staged); EnvManager-side in 73f82e9. Both commits pushed; no history rewritten.
+- #17 FIXED (5e983ee): Ecosystems.installCandidates() = all specs in preference order; resolveSpec() is its first element (identical selection semantics, one implementation). SoftwareManager.install() walks ALL candidates with honest per-attempt logging and phase reset between attempts — jq's sha256-pinned static-binary fallback is now reachable when APT fails. resolveSpec≡first-candidate property test over the full catalog. +4 tests. Stale "Packages >" hints updated to the Software screen.
+- #15+#16 FIXED (559bef0): SoftwareScreen now renders the APT operation card (kind-aware label, state chip, exit code, live log) — upgrade/search-install/repair feedback visible; installViaApt's "APT operation card above" hint is truthful. Catalog probe keyed on the STABLE allEntries set instead of filtered ids — no more one proot spawn per search keystroke.
+- DOCS + VERSION: README software bullet updated (fallback, scoped npm, APT log card) — verified behavior only; SESSION_STATE.md rewritten for alpha.14; versionCode 14 / versionName 0.1.0-alpha.14.
+- FINAL TEST/BUILD: testDebugUnitTest 119/119 PASS (111 after #13, +1 #20, +3 #14, +4 #17). assembleRelease PASS (see SESSION_STATE for APK checksum + cert verification).
+
+Stage Summary:
+- All 8 audit issues (#13-#20) closed with verified fixes; suite grew 101 -> 119, 0 failures; release-blocking defect = the always-broken APT search.
+- alpha.13's published release is left untouched (traceability rule); the fixes ship as a NEW v0.1.0-alpha.14 release.
+- Still with the user (device drills): alpha.12 (e)-(h), alpha.13 (i)-(vi) plus alpha.14 additions — search actually returns results now, APT card shows upgrade feedback.

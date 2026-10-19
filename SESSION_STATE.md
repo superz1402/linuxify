@@ -1,22 +1,38 @@
 # SESSION_STATE.md — Linuxify Android
 
-Concise handoff for the next agent session. Current as of 2026-10-19 (Task 18 —
-Universal Software Management System: searchable catalog over APT/npm/pip/static-
-binary adapters, custom tools, one-tap upgrade; v0.1.0-alpha.13).
+Concise handoff for the next agent session. Current as of 2026-10-19 (Task 19 —
+alpha.13 audit & hardening: full code audit of the Universal Software Management
+System, 8 issues filed (#13-#20) and ALL fixed with tests; v0.1.0-alpha.14).
 
 ## Repository & branch
 
 - Canonical repo: https://github.com/superz1402/linuxify — branch `main`
 - Latest verified remote commit: see `git ls-remote origin main`
 - Releases:
-  - v0.1.0-alpha.13 (current) — Universal Software Management System (see the
-    section below): Software catalog (24 curated entries: System/Dev/AI/Network/
+  - v0.1.0-alpha.14 (current) — alpha.13 audit & hardening: 8 issues (#13-#20)
+    fixed with tests. Headline: APT search WORKS again (Regex.escape's PCRE
+    \Q…\E was never valid glibc ERE, so every ordinary search returned "No
+    results" — #13); APT operations (upgrade/repair/search-install) show their
+    live log card on the Software screen (#15); catalog probe runs per entry-set
+    instead of per keystroke (#16); custom tools are re-validated when loaded
+    from disk and the probe script refuses unsafe identifiers (#14); multi-spec
+    entries walk every viable path — jq's checksum-pinned static binary is now
+    actually tried when APT fails (#17); binary removal is idempotent (#18);
+    verify-failure hints report the real exit code (#19); npm scoped
+    @scope/pkg custom tools accepted (#20). 119 unit tests. Assets:
+    linuxify-0.1.0-alpha.14-release.apk
+  - v0.1.0-alpha.13 — Universal Software Management System (see the section
+    below): Software catalog (24 curated entries: System/Dev/AI/Network/
     Media/Data/Text) over ecosystem adapters (APT, npm, pip, checksum-pinned static
     binaries — yq 4.44.3 + jq 1.7.1 arm64, sha256 cross-verified against upstream
     manifests); auto prerequisites (Node.js profile, python3-pip); per-tool run
     verification; uninstall; user-defined custom tools (apt/npm/pip, JSON-persisted);
     one-tap Update & upgrade; Packages screen renamed/rebuilt as the Software hub.
-    101 unit tests. Assets: linuxify-0.1.0-alpha.13-release.apk
+    KNOWN DEFECTS (all fixed in alpha.14, release left untouched for
+    traceability): APT search never matched ordinary names (#13), APT op card
+    missing from the rebuilt screen (#15), probe-per-keystroke (#16), custom
+    tools not re-validated on load (#14), static-binary fallback unreachable
+    (#17), plus #18/#19/#20. Assets: linuxify-0.1.0-alpha.13-release.apk
   - v0.1.0-alpha.12 — Dependency & Package Recovery Manager: one-shot environment audit, repair ONLY on real dpkg/apt
     inconsistency (never blindly), BASE env (curl + ca-certificates) auto-
     installed after a fresh environment install, optional DEVELOPER profile
@@ -130,8 +146,11 @@ binary adapters, custom tools, one-tap upgrade; v0.1.0-alpha.13).
   UNRESTRICTED terminal. OpenCode is one catalog entry among many.
 - `InstallSpec` (sealed): Apt(packages) / Npm(pkg, binary) / Pip(pkg, binary) /
   Binary(url, sha256, binaryName, version, archs). `Ecosystems.resolveSpec`
-  picks the first spec usable NOW; else the first with auto-provisionable
-  prerequisites; else null (honest unsupported-arch failure).
+  (== first of `installCandidates`) picks the first spec usable NOW; if none,
+  the first with auto-provisionable prerequisites; else null (honest
+  unsupported-arch failure). alpha.14 (#17): install() walks ALL candidates —
+  every attempted ecosystem is logged, and a later sha256-pinned spec (jq's
+  static binary) really is tried when the APT path fails.
 - Prereq chains: npm tools auto-install the Node.js toolchain via the DEVELOPER
   profile; pip tools auto-install python3-pip; pip uses --break-system-packages
   (Ubuntu 24.04 PEP 668 — the standard container-like-userland choice).
@@ -140,18 +159,30 @@ binary adapters, custom tools, one-tap upgrade; v0.1.0-alpha.13).
   cap, installed host-side into <rootfs>/usr/local/bin with exec bit.
 - Catalog entries verify via `binary --version` inside the guest; every entry
   has ≥1 spec, a verify binary, and a known category (unit-enforced).
-- CustomTools: user entries (apt/npm/pip) validated (slug ids, safe package
-  regexes — no `; | &` etc.), JSON-persisted at filesDir/custom_tools.json,
-  merged after builtins (never shadow a builtin id), corrupt JSON → empty list.
+- CustomTools: user entries (apt/npm/pip incl. npm scoped @scope/pkg, #20)
+  validated (slug ids, safe package regexes — no `; | &` etc.), JSON-persisted
+  at filesDir/custom_tools.json, merged after builtins (never shadow a builtin
+  id), corrupt JSON → empty list. alpha.14 (#14): EVERYTHING read back from
+  disk is re-validated and invalid entries are SKIPPED; the installed-state
+  probe script additionally refuses to interpolate any identifier failing the
+  shared Ecosystems.SAFE_TOKEN_RE charset (defense in depth against a
+  hand-edited/corrupt custom_tools.json reaching a guest shell).
 - SoftwareManager: one op at a time (own Mutex; apt writes serialize through
   the SHARED AptManager). Op flow: PREPARING (audit+prereqs) → INSTALLING →
   VERIFYING → DONE/FAILED with recovery hints. remove() maps to the same
   adapter. refreshInstalledState = ONE proot spawn probing all visible binaries.
 - UI: PackagesScreen REPLACED by SoftwareScreen (route stays "packages"): the
-  alpha.12 Environment card (+ new Update & upgrade button), software op card
+  alpha.12 Environment card (+ new Update & upgrade button), the APT operation
+  card (alpha.14 #15 — kind-aware label, state chip, exit code, live log for
+  every apt operation incl. upgrades and search-installs), software op card
   with live log, catalog card (search + category chips + per-entry Install/
   Remove + custom-entry delete), Add-custom-tool dialog, and the unrestricted
-  full-APT search below. Home button label: Software.
+  full-APT search below. Home button label: Software. alpha.14 (#16): the
+  installed-state probe is keyed on the stable entry set — one proot spawn per
+  screen entry / custom-tool change / completed operation, NOT per keystroke.
+- alpha.14 test/lint hardening: AptCommands (pure) builds the apt-cache ERE
+  with backslash-escaped metacharacters (glibc-verified host-side) and
+  isInstalled() runs dpkg -s as argv exec + explicit status-line parse (#13).
 - ENV ROLLBACK hit AGAIN mid-session (Task 18): HEAD reverted to alpha.5, JDK
   + SDK + download/ APKs wiped — but origin/main held alpha.12 and the
   untracked new files survived. Recovered: git reset --hard origin/main,
@@ -244,11 +275,20 @@ binary adapters, custom tools, one-tap upgrade; v0.1.0-alpha.13).
   sha256-verified, `yq --version` works; (iv) Update & upgrade one-tap;
   (v) Add custom tool (e.g. pip yt-dlp) → installs + verifies; (vi) terminal
   still unrestricted — `apt install sl` style manual installs unaffected.
+- Awaiting user drill for alpha.14: (vii) Software > All APT packages →
+  search "htop" → RESULTS appear (was broken: "No results" for everything);
+  install one and see the APT operation card show the live apt log (#13+#15);
+  (viii) Update & upgrade → the APT operation card ("Update & upgrade") shows
+  progress/log/completion instead of nothing (#15).
 
 ## Next exact actions
 
-1. User tests alpha.13 on device: drills (e)–(h) from alpha.12 if not yet
-   done, plus (i)–(vi) above.
-2. Candidate next features: full `dpkg -l` installed-packages screen, custom
-   APT repositories, Rust/Cargo adapter, session close button ("×" on ended
+1. User tests alpha.14 on device: drills (e)-(h) from alpha.12, (i)-(vi) from
+   alpha.13, plus (vii)-(viii) above.
+2. Candidate next features: full `dpkg -l` installed-packages screen (the
+   AptCommands.hasInstalledStatus parser is ready for reuse), custom APT
+   repositories, Rust/Cargo adapter, session close button ("×" on ended
    tabs), in-app self-update.
+3. Known accepted limitations (documented, not bugs): software op state is
+   in-memory only (process death clears the card; installed state re-probes on
+   next visit); in-flight installs cannot be cancelled from the UI yet.

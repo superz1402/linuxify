@@ -28,13 +28,17 @@ daemon, no Termux dependency, no remote server required.
 - **Recovers from flaky internet**: the rootfs download uses HTTP Range resume,
   exponential backoff with jitter (up to 8 attempts), and checksum verification before
   anything is trusted; every apt operation carries an IPv4 fallback.
-- **Manages software universally** (Universal Software Management System, alpha.13):
+- **Manages software universally** (Universal Software Management System, alpha.13/14):
   a searchable **Software catalog** (System / Dev / AI / Network / Media / Data / Text)
   installs any tool through shared ecosystem adapters — **APT, npm, pip, and
   checksum-pinned static Linux binaries** — with automatic prerequisites (Node.js for
   npm tools, python3-pip for pip tools), per-tool verification that the executable
-  actually runs, uninstall, and honest failure reporting with recovery steps. Users can
-  add **custom tools** (apt/npm/pip) that flow through the exact same core, and
+  actually runs, uninstall, and honest failure reporting with recovery steps. Entries
+  with several installation paths try them in preference order (e.g. jq falls back to
+  a checksum-pinned static binary when the APT path fails). APT operations show their
+  live log on the Software screen. Users can
+  add **custom tools** (apt/npm/pip, including npm scoped names like `@scope/pkg`) that
+  flow through the exact same core, and
   **Update & upgrade** the whole environment in one tap. The catalog is data on top of
   the core — **the terminal stays unrestricted** for scripts, source builds, and
   anything not in the catalog.
@@ -53,7 +57,7 @@ daemon, no Termux dependency, no remote server required.
 
 ## Status
 
-Early development (v0.1.0-alpha.13). See [worklog.md](worklog.md), [SESSION_STATE.md](SESSION_STATE.md),
+Early development (v0.1.0-alpha.14). See [worklog.md](worklog.md), [SESSION_STATE.md](SESSION_STATE.md),
 [docs/CLI_PARITY.md](docs/CLI_PARITY.md) (full CLI ⇄ app feature audit) and the GitHub
 issue tracker for verified progress. What is claimed where is strictly separated into:
 **build-verified**, **host-verified**, **device-verified** — anything not labeled is not verified.
