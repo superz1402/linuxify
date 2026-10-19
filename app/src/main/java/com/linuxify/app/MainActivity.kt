@@ -122,13 +122,7 @@ fun LinuxifyRoot(
                     destinations.forEach { d ->
                         NavigationBarItem(
                             selected = currentRoute == d.route,
-                            onClick = {
-                                navController.navigate(d.route) {
-                                    popUpTo("home") { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            },
+                            onClick = { openTab(navController, d.route) },
                             icon = { Icon(d.icon, contentDescription = d.label) },
                             label = { Text(d.label) },
                         )
@@ -151,13 +145,7 @@ fun LinuxifyRoot(
                     destinations.forEach { d ->
                         NavigationRailItem(
                             selected = currentRoute == d.route,
-                            onClick = {
-                                navController.navigate(d.route) {
-                                    popUpTo("home") { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            },
+                            onClick = { openTab(navController, d.route) },
                             icon = { Icon(d.icon, contentDescription = d.label) },
                             label = { Text(d.label) },
                         )
@@ -169,23 +157,52 @@ fun LinuxifyRoot(
     }
 }
 
+/**
+ * Tab navigation — the "tab always shows its own screen" rule (issue #22).
+ *
+ * The previous pattern (popUpTo(home){saveState=true} + restoreState=true)
+ * RESTORED the whole saved stack of a tab: opening the terminal from Projects
+ * stacked "terminal" on top of "projects", so tapping the Projects tab later
+ * brought Terminal back on top — the user landed on a terminal session when
+ * they asked for the project list.
+ *
+ * The fix: tab taps pop to home WITHOUT saving/restoring per-tab stacks, so
+ * every tap lands on a fresh instance of that tab's root screen. Screens keep
+ * their process-scoped state anyway (ViewModels, TerminalSessionRegistry), so
+ * nothing user-visible is lost. Deep destinations ("files") are stacked
+ * normally with a working Back button; a tab tap still wins over them.
+ */
+private fun openTab(navController: NavHostController, route: String) {
+    navController.navigate(route) {
+        popUpTo("home") { inclusive = false }
+        launchSingleTop = true
+    }
+}
+
 @Composable
 private fun LinuxifyNavHost(navController: NavHostController, vm: AppViewModel) {
     NavHost(navController, startDestination = "home") {
         composable("home") {
             HomeScreen(
                 vm = vm,
-                onOpenTerminal = { navController.navigate("terminal") { launchSingleTop = true } },
-                onOpenProjects = { navController.navigate("projects") { launchSingleTop = true } },
-                onOpenServices = { navController.navigate("services") { launchSingleTop = true } },
-                onOpenPackages = { navController.navigate("packages") { launchSingleTop = true } },
+                onOpenTerminal = { openTab(navController, "terminal") },
+                onOpenProjects = { openTab(navController, "projects") },
+                onOpenServices = { openTab(navController, "services") },
+                onOpenPackages = { openTab(navController, "packages") },
             )
         }
         composable("terminal") { TerminalScreen(vm) }
         composable("projects") {
             ProjectsScreen(
                 vm = vm,
-                onOpenTerminalIn = { navController.navigate("terminal") { launchSingleTop = true } },
+                onOpenTerminalIn = { project ->
+                    // "Open terminal" IS a tab switch to Terminal (issue #22):
+                    // the terminal is one of the five root destinations, and
+                    // stacking it here is what broke the Projects tab. The
+                    // project dir travels through the VM, not the nav route.
+                    vm.requestTerminalInProject(project)
+                    openTab(navController, "terminal")
+                },
                 onBrowseFiles = { navController.navigate("files") { launchSingleTop = true } },
             )
         }

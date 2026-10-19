@@ -168,6 +168,36 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _projectsState = MutableStateFlow(ProjectsUiState())
     val projectsState: StateFlow<ProjectsUiState> = _projectsState
 
+    // ---- Cross-screen "open in" requests (issue #22) ----
+    // Projects hands a target directory to the Terminal / Files screens via
+    // these pending slots instead of nav route arguments: the values are guest
+    // paths (no URL-encoding worries), consumed exactly once on first
+    // composition, and never linger in the back stack.
+
+    /** Guest path the next spawned terminal session should start in, or null. */
+    private var pendingTerminalWorkdir: String? = null
+
+    /** Directory the Files screen should start in when next composed, or null. */
+    private var pendingFilesStartDir: String? = null
+
+    /** "Open terminal" on a project: next terminal spawn starts in its dir. */
+    fun requestTerminalInProject(projectName: String) {
+        pendingTerminalWorkdir = "/root/projects/$projectName"
+    }
+
+    /** "Browse files" on a project: the Files screen opens at its directory. */
+    fun requestFilesInProject(projectName: String) {
+        pendingFilesStartDir = "/root/projects/$projectName"
+    }
+
+    /** Terminal-side consume-once (null = no request; plain spawn in /root). */
+    fun consumePendingTerminalWorkdir(): String? =
+        pendingTerminalWorkdir.also { pendingTerminalWorkdir = null }
+
+    /** Files-side consume-once (null = no request; start at /root). */
+    fun consumePendingFilesStartDir(): String? =
+        pendingFilesStartDir.also { pendingFilesStartDir = null }
+
     fun refreshProjects() {
         viewModelScope.launch(Dispatchers.IO + bgGuard) {
             _projectsState.value = _projectsState.value.copy(loading = true)

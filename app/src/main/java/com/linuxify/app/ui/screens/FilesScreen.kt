@@ -41,7 +41,10 @@ import java.io.File
  */
 @Composable
 fun FilesScreen(vm: AppViewModel) {
-    var currentRel by remember { mutableStateOf("/root") }
+    // A project "Browse files" hands its directory over via the VM's pending
+    // request (issue #22); consume-once at first composition — a plain visit
+    // from Home starts at /root as before.
+    var currentRel by remember { mutableStateOf(vm.consumePendingFilesStartDir() ?: "/root") }
     var showHidden by remember { mutableStateOf(false) }
     var viewing by remember { mutableStateOf<File?>(null) }
     var viewText by remember { mutableStateOf<String?>(null) }

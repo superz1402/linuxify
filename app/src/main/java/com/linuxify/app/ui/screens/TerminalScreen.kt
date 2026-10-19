@@ -113,9 +113,17 @@ fun TerminalScreen(vm: AppViewModel) {
 
     val sessionClient = TerminalSessionRegistry.client
 
-    fun spawnSession(initial: String? = null) {
+    fun spawnSession(initial: String? = null, workdir: String? = null) {
         try {
-            val s = PtyTerminal.newShellSession(context, sessionClient, initialCommand = initial)
+            // workdir: null = the plain default (/root); a project "Open
+            // terminal" passes its directory through the VM's pending request
+            // so the shell starts INSIDE the project (issue #22).
+            val s = PtyTerminal.newShellSession(
+                context,
+                sessionClient,
+                workdir = workdir ?: "/root",
+                initialCommand = initial,
+            )
             TerminalSessionRegistry.add(context, s)
             selected = sessions.size - 1
             spawnError = null
@@ -126,7 +134,14 @@ fun TerminalScreen(vm: AppViewModel) {
     }
 
     LaunchedEffect(Unit) {
-        if (jniError == null && sessions.isEmpty()) spawnSession()
+        // A pending "open terminal in project" request spawns a NEW session in
+        // that directory even when other sessions exist — it is an explicit
+        // user action. A plain visit to the tab keeps the old behavior:
+        // reattach to the existing sessions, spawn only when there are none.
+        val requestedWorkdir = vm.consumePendingTerminalWorkdir()
+        if (jniError == null && (requestedWorkdir != null || sessions.isEmpty())) {
+            spawnSession(workdir = requestedWorkdir)
+        }
         // ended-session events refresh the tab labels
         sessionClient.onUiInvalidated = { refreshTick += 1 }
     }

@@ -210,7 +210,7 @@ class SafeTarExtractor(
         }
         java.nio.file.Files.createSymbolicLink(
             target.toPath(),
-            java.nio.file.Path.of(linkTarget),
+            java.nio.file.Paths.get(linkTarget),
         )
         true
     } catch (_: Exception) {

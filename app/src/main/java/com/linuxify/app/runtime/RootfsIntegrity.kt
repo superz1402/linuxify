@@ -311,7 +311,7 @@ object RootfsIntegrity {
                                 target.parentFile?.mkdirs()
                                 if (target.exists() || Files.isSymbolicLink(target.toPath())) target.delete()
                                 try {
-                                    Files.createSymbolicLink(target.toPath(), java.nio.file.Path.of(entry.linkName))
+                                    Files.createSymbolicLink(target.toPath(), java.nio.file.Paths.get(entry.linkName))
                                     repaired++
                                 } catch (_: Exception) {
                                     continue

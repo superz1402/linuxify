@@ -103,7 +103,10 @@ fun ProjectsScreen(
                             )
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 TextButton(onClick = { onOpenTerminalIn(p.name) }) { Text("Open terminal") }
-                                TextButton(onClick = onBrowseFiles) { Text("Browse files") }
+                                TextButton(onClick = {
+                                    vm.requestFilesInProject(p.name)
+                                    onBrowseFiles()
+                                }) { Text("Browse files") }
                             }
                         }
                     }
