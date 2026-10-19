@@ -1,41 +1,63 @@
 # SESSION_STATE.md — Linuxify Android
 
-Concise handoff for the next agent session. Current as of 2026-10-19 (Task 20 —
-closed-source APK licensing & distribution audit, GitHub issue #21, branch
-`audit/proprietary-distribution`).
+Concise handoff for the next agent session. Current as of 2026-10-19 (Task 21 —
+licensing audit COMPLETE: re-verification, lint fix, APK verification, issue
+#21 comment; branch `audit/proprietary-distribution`).
 
-## ACTIVE TASK — issue #21: licensing & distribution audit
+## COMPLETED TASK — issue #21: licensing & distribution audit (verdict B)
 
-- Question: can Linuxify ship as a proprietary closed-source APK with the
-  Kotlin/Compose source private? Evidence-driven audit mandated by the user.
-- Branch: `audit/proprietary-distribution` (from main @ c0ec30d). Issue: #21.
-- ESTABLISHED FACTS (primary-source verified, see worklog Task 20):
-  - Vendored com/termux Java: 17/20 files byte-identical to termux-app v0.118.0,
-    3 files with small Linuxify patches. Upstream v0.118.0 LICENSE.md says
-    "GPLv3 only" (the Apache-2.0 bullet documents the jackpal ORIGIN of the
-    terminal code, it is not a regrant). GitHub licence detection: NOASSERTION.
-  - libtermux.so: prebuilt JNI from the official termux-app v0.118.0 release
-    APK; loaded IN-PROCESS (System.loadLibrary("termux")); GPL-3.0.
-  - Linuxify Kotlin imports/extends com.termux.* directly (PtyTerminal,
-    TerminalSessionRegistry, TerminalScreen) → APK is a GPL combined work.
-  - proot (libproot.so + libproot-loader.so): GPL-2.0-OR-LATER (source headers
-    at pinned tag v5.1.107.96); exec'd as a SEPARATE executable (fork/exec,
-    arm's-length) → aggregation, not linking. Binaries MODIFIED post-build
-    (DT_NEEDED rewrite via tools/patch_elf_needed.py — corresponding-source
-    material must ship with distribution).
-  - libtalloc.so: LGPL-3.0 (talloc 2.5.0 tarball LICENSE; Termux metadata
-    "GPL-3.0" is imprecise). libshmem.so: BSD-3-Clause. Linked by proot only.
-  - Ubuntu rootfs: NOT bundled — downloaded at runtime from cdimage.ubuntu.com
-    (SHA-256-pinned) → the app developer never conveys it; no obligations flow
-    to Linuxify's own code from rootfs contents.
-  - Gradle deps: Apache-2.0 across the board (test-only junit/org.json aside).
-- Working verdict (to be written up in docs/PROPRIETARY_DISTRIBUTION_AUDIT.md):
-  B — proprietary APK FEASIBLE WITH SPECIFIC CHANGES. The blocker is ONLY the
-  in-process GPL terminal stack (vendored Java + libtermux.so). Current public
-  releases are GPL-3.0-or-later per README and stay GPL-distributed.
-- Known compliance gaps (fixing in this task): no LICENSE file at repo root;
-  docs/RUNTIME.md "proot: GPLv3+" is wrong (GPL-2.0-or-later); no distribution-
-  facing third-party notices/source-offer document; no in-app notices surface.
+- FINAL VERDICT: **B — proprietary closed-source APK FEASIBLE WITH SPECIFIC
+  CHANGES**. The ONLY blocker is the in-process GPL terminal stack (20
+  vendored `com/termux/**` Java files compiled into classes.dex + GPL
+  `libtermux.so` loaded via `System.loadLibrary` into the app process, plus
+  direct Linuxify imports/uses of `com.termux.terminal.*` / `com.termux.view.*`).
+  That makes the current APK a GPL-3.0 combined work → Kotlin/Compose source
+  cannot stay private TODAY. After replacing/removing that stack (or a written
+  Termux licence grant), the app's own sources can stay private.
+- NOT a blocker: proot (`libproot.so` + loader, GPL-2.0-or-later) is exec'd
+  as a SEPARATE process via ProcessBuilder/fork+exec — aggregation, not
+  linking; obligations (notices + corresponding-source for the MODIFIED proot
+  binaries) are satisfiable without exposing app code. talloc (LGPL-3.0) and
+  libandroid-shmem (BSD-3-Clause) are proot-only DT_NEEDED deps — same story.
+  Ubuntu rootfs is runtime-downloaded, never conveyed by the developer.
+- Re-verification (second session, after another host rollback — JDK/SDK and
+  scratch scripts wiped, repo intact):
+  - Upstream re-fetched: termux-app v0.118.0 LICENSE.md verbatim GPLv3-only;
+    proot COPYING GPL-2.0 + tracee.c "or later" header; libandroid-shmem
+    BSD-3-Clause; talloc-2.5.0.tar.gz re-downloaded (SHA-256 matches pin,
+    LICENSE = LGPL-3.0 → Termux metadata "GPL-3.0" imprecise, as audited).
+  - Vendored diff re-run: 17/20 byte-identical; 3 modified exactly as
+    audit §6.2 (TerminalView 8 lines, TextSelectionCursorController 19,
+    TextSelectionHandleView 2).
+  - All 10 jniLibs digests match `runtime-binaries.json` pins.
+  - `testDebugUnitTest`: 124/124 PASS (119 alpha.14 + 5 LicensesAssetsTest).
+  - `lintRelease`: initially FAILED — 2 PRE-EXISTING NewApi errors
+    (alpha.3/4 commits, not audit regressions): `Path.of` needs API 34 vs
+    minSdk 26 in RootfsIntegrity.kt:314 + SafeTarExtractor.kt:213 (latent
+    NoSuchMethodError on Android 10–13 during rootfs install). FIXED with
+    behavior-identical `Paths.get` (API 26). Now PASSES (22 pre-existing
+    warnings remain, none in audit-touched files).
+  - `assembleRelease`: SUCCESS — com.linuxify.app 0.1.0-alpha.14
+    (versionCode 14), minSdk 26/targetSdk 28; 5 binaries per ABI byte-match
+    repo jniLibs; `assets/licenses/` (5 texts + notices) present and
+    byte-identical to repo copies; cert SHA-256
+    8f55e46675c284931e79f3ccc7fde4fad8970f6af4d506f5b75ed3edd7bdcca9
+    (stable identity unchanged); NO secrets/keystore inside APK.
+  - Audit doc gained §13 (re-verification record); evidence scripts cited in
+    §12 were lost to the rollback and are noted as such.
+- Compliance changes already shipped in this branch (commit ad7a350): root
+  LICENSE (GPL-3.0), docs/THIRD_PARTY_NOTICES.md + byte-identical in-APK copy
+  (assets/licenses/), 5 licence texts, in-app Settings → Third-party licences
+  dialog, RUNTIME.md/THIRD_PARTY_TERMUX_LICENSE.md corrections, 5 new tests.
+- REMAINING for a proprietary release (NOT done, needs owner decision):
+  1. [ENGINEERING BLOCKER] Replace the in-process GPL terminal stack (§8 of
+     the audit: jackpal originals / ConnectBot / xterm.js / written Termux
+     grant). Substantial effort — it is the app's core surface.
+  2. [LEGAL] §11 questions to a licensing lawyer (Termux exception reading,
+     APK-container aggregation comfort, LGPL-in-APK, Installation Information,
+     store terms).
+  3. [AFTER 1] Licence statement change in README/in-app; prior releases stay
+     GPL.
 
 ## Repository & branch
 

@@ -15,7 +15,7 @@ import java.io.File
  */
 class LicensesAssetsTest {
 
-    private val moduleDir: File = File(System.getProperty("user.dir"))
+    private val moduleDir: File = File(System.getProperty("user.dir")!!)
     private val repoDir: File = moduleDir.parentFile!!
 
     private fun assetLicencesDir() = File(moduleDir, "src/main/assets/licenses")

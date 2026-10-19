@@ -547,4 +547,66 @@ redesign.
   gnu.org GPL FAQ (live fetch) and the SPDX licence texts.
 - Scripts/reports of the checks: `/home/z/my-project/scripts/licence_check.py`
   (byte-diff + talloc extraction), `scripts/upstream_diff/**` (per-file
-  diffs).
+  diffs). **Note (2026-10-19, second session): the disposable server was
+  rolled back and those scratch paths no longer exist. Every claim in this
+  report was therefore re-verified from primary sources in a fresh session —
+  see §13.**
+
+---
+
+## 13. Re-verification record (second session, 2026-10-19, branch `audit/proprietary-distribution`)
+
+Each §1–§12 claim was re-checked against primary sources in a new session on
+a rolled-back host (scratch scripts lost; repository state intact). Results:
+
+1. **Integration facts re-verified in the tree**: `JNI.java:9`
+   `System.loadLibrary("termux")` (in-process load); `PtyTerminal.kt`
+   imports `TerminalSession`/`TerminalSessionClient`;
+   `TerminalSessionRegistry.kt` implements `TerminalSessionClient` and holds
+   `TerminalView`; `TerminalScreen.kt` embeds `TerminalView`;
+   `LinuxRuntime.kt:167` launches proot via `ProcessBuilder` (fork/exec).
+   The §4 combined-work boundary stands exactly as written.
+2. **Binary digests re-verified**: all 10 jniLibs artifacts (2 ABIs ×
+   libtermux/libproot/libproot-loader/libtalloc/libshmem) match their
+   SHA-256 pins in `runtime-binaries.json` (proot = `post_process`
+   patched-digest entries).
+3. **Upstream licences re-fetched and quoted**: termux-app `v0.118.0`
+   `LICENSE.md` verbatim ("released under GPLv3 only" + origin-phrased
+   Exceptions); `termux/proot@v5.1.107.96` `COPYING` = GPL-2.0 (June 1991)
+   and `src/tracee/tracee.c` header = "version 2 … or (at your option) any
+   later version"; `termux/libandroid-shmem` = BSD-3-Clause (GitHub
+   detection); `talloc-2.5.0.tar.gz` re-downloaded from samba.org —
+   SHA-256 `912afa23…` matches the pin and its `LICENSE` is LGPL-3.0
+   (confirming Termux's `TERMUX_PKG_LICENSE="GPL-3.0"` metadata is
+   imprecise, as §5.3 states).
+4. **Vendored-file diff re-run** (fresh byte-comparison against
+   `termux-app@v0.118.0`): 17/20 identical; 3 modified — `TerminalView.java`
+   (8 diff lines), `TextSelectionCursorController.java` (19),
+   `TextSelectionHandleView.java` (2) — matching §6.2 exactly.
+5. **Build + lint + tests (this session, JDK 21.0.12.1 + SDK 35, Gradle 8.9)**:
+   - `testDebugUnitTest`: **124 tests, 0 failures** (119 alpha.14 + 5 new
+     LicensesAssetsTest).
+   - `lintRelease` initially **FAILED with 2 pre-existing errors**
+     (introduced in alpha.3/alpha.4, `be9371c`/`fff3761`; not touched by this
+     audit's commits): `java.nio.file.Path.of` requires API 34 while minSdk
+     is 26, in `RootfsIntegrity.kt:314` and `SafeTarExtractor.kt:213` —
+     a latent `NoSuchMethodError` on Android 10–13 devices during rootfs
+     install/repair. **Fixed** with the behavior-identical
+     `java.nio.file.Paths.get` (API 26); `lintRelease` now **passes**
+     (22 remaining warnings are all pre-existing, none in files touched by
+     this audit). This also closes a real device-compatibility defect in the
+     runtime, not merely a lint formality.
+   - `assembleRelease`: **success**. APK `com.linuxify.app` versionCode 14
+     (`0.1.0-alpha.14`), minSdk 26 / targetSdk 28; 5 bundled binaries per
+     ABI byte-identical to the repo jniLibs (and thus to the provenance
+     pins); `assets/licenses/` (5 licence texts + notices) present in the
+     APK and byte-identical to the repository copies; certificate SHA-256
+     `8f55e46675c284931e79f3ccc7fde4fad8970f6af4d506f5b75ed3edd7bdcca9`
+     (the stable signing identity recorded in `SESSION_STATE.md`); no
+     keystore/credential files inside the APK.
+6. **Verdict unchanged: B.** The audit's framing survives re-verification:
+   the proot fork/exec boundary (§4.1) is aggregation; the in-process
+   Termux Java + `libtermux.so` (§4.1, §5.2) is the sole combined-work
+   blocker; both assessments are independent of each other. §11 (professional
+   legal review) remains the required next step before any proprietary
+   release.
