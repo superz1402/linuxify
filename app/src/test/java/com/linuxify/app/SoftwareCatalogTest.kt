@@ -74,6 +74,41 @@ class SoftwareCatalogTest {
     }
 
     @Test
+    fun `installCandidates keeps the whole preference order including the fallback — issue 17`() {
+        val entry = Catalog.findById(Catalog.ENTRIES, "jq")!!
+        val candidates = Ecosystems.installCandidates(entry.specs, auditAllTools)
+        assertEquals(2, candidates.size)
+        assertTrue(candidates[0] is InstallSpec.Apt)
+        assertTrue(candidates[1] is InstallSpec.Binary)
+    }
+
+    @Test
+    fun `installCandidates is empty when no path works on the architecture`() {
+        val entry = Catalog.findById(Catalog.ENTRIES, "yq")!!
+        val x86 = auditNoTools.copy(arch = "amd64")
+        assertTrue(Ecosystems.installCandidates(entry.specs, x86).isEmpty())
+    }
+
+    @Test
+    fun `auto-provisionable specs stay candidates when nothing is usable now`() {
+        val specs = listOf<InstallSpec>(InstallSpec.Npm("typescript", "tsc"))
+        assertEquals(specs, Ecosystems.installCandidates(specs, auditNoTools))
+    }
+
+    @Test
+    fun `resolveSpec stays the first install candidate for every catalog entry`() {
+        Catalog.ENTRIES.forEach { entry ->
+            listOf(auditAllTools, auditNoTools).forEach { audit ->
+                assertEquals(
+                    "entry ${entry.id}",
+                    Ecosystems.resolveSpec(entry.specs, audit),
+                    Ecosystems.installCandidates(entry.specs, audit).firstOrNull(),
+                )
+            }
+        }
+    }
+
+    @Test
     fun `pip prerequisite is python3-pip and npm needs the developer profile`() {
         val pip = InstallSpec.Pip("ruff", "ruff")
         val npm = InstallSpec.Npm("typescript", "tsc")

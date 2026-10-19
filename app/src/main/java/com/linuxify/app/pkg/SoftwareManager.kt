@@ -173,21 +173,41 @@ class SoftwareManager(
                 fail("Could not probe the Linux environment. Try again, or run the command in a terminal.")
                 return
             }
-            val spec = Ecosystems.resolveSpec(entry.specs, audit)
-            if (spec == null) {
+            _op.value = _op.value?.copy(ecosystem = null)
+            pushLog("${entry.name}: resolving installation path")
+
+            // Issue #17: walk ALL viable specs in preference order so a later
+            // candidate (e.g. jq's checksum-pinned static binary) can succeed
+            // when the primary path (APT) fails. Every attempt is logged.
+            val candidates = Ecosystems.installCandidates(entry.specs, audit)
+            if (candidates.isEmpty()) {
                 fail("No compatible installation path for ${entry.name} on architecture ${audit.arch ?: "unknown"}.")
                 return
             }
-            _op.value = _op.value?.copy(ecosystem = Ecosystems.idOf(spec))
-            pushLog("${entry.name}: installing via ${Ecosystems.labelOf(spec)}")
-
-            val ok = when (spec) {
-                is InstallSpec.Apt -> installViaApt(spec)
-                is InstallSpec.Npm -> installViaNpm(spec)
-                is InstallSpec.Pip -> installViaPip(spec)
-                is InstallSpec.Binary -> installViaBinary(spec)
+            var succeeded = false
+            for ((index, spec) in candidates.withIndex()) {
+                _op.value = _op.value?.copy(ecosystem = Ecosystems.idOf(spec))
+                pushLog("${entry.name}: installing via ${Ecosystems.labelOf(spec)}")
+                val ok = when (spec) {
+                    is InstallSpec.Apt -> installViaApt(spec)
+                    is InstallSpec.Npm -> installViaNpm(spec)
+                    is InstallSpec.Pip -> installViaPip(spec)
+                    is InstallSpec.Binary -> installViaBinary(spec)
+                }
+                if (ok) {
+                    succeeded = true
+                    break
+                }
+                if (index < candidates.size - 1) {
+                    pushLog(
+                        "${Ecosystems.labelOf(spec)} path failed — trying the next installation path " +
+                            "(${index + 2}/${candidates.size})",
+                    )
+                    // A failed attempt is not the terminal state while a fallback remains.
+                    _op.value = _op.value?.copy(phase = Phase.INSTALLING, failureHint = null)
+                }
             }
-            if (!ok) return
+            if (!succeeded) return  // the last attempt already recorded FAILED + its specific hint
 
             setPhase(Phase.VERIFYING)
             val result = verifyEntry(entry)
@@ -210,7 +230,7 @@ class SoftwareManager(
 
     private suspend fun installViaApt(spec: InstallSpec.Apt): Boolean {
         if (!env.ensureHealthyOnly()) {
-            return fail(env.state.value.failureHint ?: "Package manager is inconsistent — repair it first (Packages > Repair package manager).")
+            return fail(env.state.value.failureHint ?: "Package manager is inconsistent — repair it first (Software > Environment > Repair package manager).")
         }
         setPhase(Phase.INSTALLING)
         val op = apt.install(*spec.packages.toTypedArray())

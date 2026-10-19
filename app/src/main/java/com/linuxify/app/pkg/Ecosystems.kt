@@ -98,16 +98,24 @@ object Ecosystems {
      * the first spec whose prerequisites can be auto-provisioned wins; else
      * null (unsupported architecture / no viable path — reported, never guessed).
      */
-    fun resolveSpec(specs: List<InstallSpec>, audit: EnvCore.EnvAudit?): InstallSpec? {
-        specs.firstOrNull { usableNow(it, audit) }?.let { return it }
-        return specs.firstOrNull { spec ->
-            when (spec) {
-                is InstallSpec.Apt -> false
-                is InstallSpec.Npm -> audit != null
-                is InstallSpec.Pip -> audit != null
-                is InstallSpec.Binary -> audit != null && audit.arch != null && audit.arch in spec.archs
-            }
-        }
+    fun resolveSpec(specs: List<InstallSpec>, audit: EnvCore.EnvAudit?): InstallSpec? =
+        installCandidates(specs, audit).firstOrNull()
+
+    /**
+     * All specs worth attempting, in preference order (issue #17): usable-now
+     * first, then specs whose prerequisites the manager can auto-provision.
+     * [resolveSpec] is only the first candidate — the manager walks the WHOLE
+     * list so a later checksum-pinned fallback can still succeed when the
+     * primary path fails (e.g. jq's static binary after a broken APT attempt).
+     */
+    fun installCandidates(specs: List<InstallSpec>, audit: EnvCore.EnvAudit?): List<InstallSpec> =
+        specs.filter { usableNow(it, audit) || autoProvisionable(it, audit) }
+
+    private fun autoProvisionable(spec: InstallSpec, audit: EnvCore.EnvAudit?): Boolean = when (spec) {
+        is InstallSpec.Apt -> false
+        is InstallSpec.Npm -> audit != null
+        is InstallSpec.Pip -> audit != null
+        is InstallSpec.Binary -> audit != null && audit.arch != null && audit.arch in spec.archs
     }
 
     // ---------------------------------------------------- command builders

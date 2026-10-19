@@ -288,7 +288,7 @@ class EnvManager(
                 EnvCore.STEP_FIX_BROKEN ->
                     "Check free storage and network, then in a terminal run: DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::ForceIPv4=true --fix-broken install -y"
                 else ->
-                    "Check network and free storage, then retry from the Packages screen. Recovery in a terminal: DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::ForceIPv4=true update -y && apt-get -o Acquire::ForceIPv4=true --fix-broken install -y"
+                    "Check network and free storage, then retry from the Software screen. Recovery in a terminal: DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::ForceIPv4=true update -y && apt-get -o Acquire::ForceIPv4=true --fix-broken install -y"
             }
             if (fatal) fail("Step failed: $title ($note). $recovery")
             else pushLog("step failed (continuing): $title ($note)")
@@ -326,11 +326,11 @@ class EnvManager(
 
     private fun recoveryHintText(a: EnvCore.EnvAudit): String = when {
         a.dpkgInterrupted && a.brokenDeps ->
-            "Package database is inconsistent. Packages > Repair package manager, or in a terminal: DEBIAN_FRONTEND=noninteractive dpkg --configure -a && apt-get -o Acquire::ForceIPv4=true --fix-broken install -y"
+            "Package database is inconsistent. Software > Environment > Repair package manager, or in a terminal: DEBIAN_FRONTEND=noninteractive dpkg --configure -a && apt-get -o Acquire::ForceIPv4=true --fix-broken install -y"
         a.dpkgInterrupted ->
-            "An earlier dpkg run was interrupted. Packages > Repair package manager, or in a terminal: DEBIAN_FRONTEND=noninteractive dpkg --configure -a"
+            "An earlier dpkg run was interrupted. Software > Environment > Repair package manager, or in a terminal: DEBIAN_FRONTEND=noninteractive dpkg --configure -a"
         a.brokenDeps ->
-            "Package dependencies are broken. Packages > Repair package manager, or in a terminal: DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::ForceIPv4=true --fix-broken install -y"
+            "Package dependencies are broken. Software > Environment > Repair package manager, or in a terminal: DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::ForceIPv4=true --fix-broken install -y"
         else -> "Environment needs attention."
     }
 }

@@ -261,7 +261,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 AptManager.Operation(
                     AptManager.Operation.Kind.INSTALL,
                     AptManager.Operation.State.FAILED,
-                    listOf(env.state.value.failureHint ?: "package manager is inconsistent — repair it first (Packages > Repair package manager)"),
+                    listOf(env.state.value.failureHint ?: "package manager is inconsistent — repair it first (Software > Environment > Repair package manager)"),
                 )
             } else {
                 runCatching { apt.install(*names) }.getOrElse {
