@@ -23,12 +23,16 @@ import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSiz
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Description
@@ -51,6 +55,7 @@ import com.linuxify.app.ui.screens.ServicesScreen
 import com.linuxify.app.ui.screens.SettingsScreen
 import com.linuxify.app.ui.screens.SetupScreen
 import com.linuxify.app.ui.screens.TerminalScreen
+import com.linuxify.app.terminal.TerminalPersistence
 import com.linuxify.app.ui.theme.LinuxifyTheme
 
 class MainActivity : ComponentActivity() {
@@ -108,6 +113,20 @@ fun LinuxifyRoot(
     val runtimeReady = remember(installState) {
         (installState is com.linuxify.app.runtime.RootfsInstaller.InstallState.Ready ||
             vm.installer.isReadyMarkerPresent()) && vm.runtimeBinariesOk()
+    }
+
+    // Terminal persistence guard (issue #23): when the app goes to the
+    // background, flush every live session's transcript to disk so a force
+    // stop / process kill loses at most a few keystrokes of scrollback.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                runCatching { TerminalPersistence.flushAll(vm.getApplication()) }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     if (!runtimeReady) {

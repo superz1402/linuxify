@@ -30,6 +30,13 @@ class SafeTarExtractor(
     private val destDir: File,
     private val maxTotalBytes: Long = 2L * 1024 * 1024 * 1024,
     private val onEntry: ((name: String) -> Unit)? = null,
+    /**
+     * Optional restore filter (issue #23): entries whose sanitized relative
+     * path returns true are EXCLUDED from extraction (recorded in Result
+     * .skipped as "(excluded by filter)"). Used by backup restore to extract
+     * only the scopes the user selected. Never used by the installer.
+     */
+    private val skipEntry: ((name: String) -> Boolean)? = null,
 ) {
 
     data class Result(val entries: Int, val bytes: Long, val skipped: List<String> = emptyList())
@@ -129,6 +136,20 @@ class SafeTarExtractor(
                 val rel = sanitizePath(entry.name)
                 if (rel == null) {
                     skipped.add("${entry.name} (unsafe path)")
+                    continue
+                }
+                if (skipEntry?.invoke(rel) == true) {
+                    skipped.add("$rel (excluded by filter)")
+                    // Must still consume the entry payload so the stream stays aligned.
+                    if (entry.isFile && entry.size > 0) {
+                        var remaining = entry.size
+                        val buf = ByteArray(DEFAULT_BUFFER_SIZE * 8)
+                        while (remaining > 0) {
+                            val n = tar.read(buf, 0, minOf(buf.size.toLong(), remaining).toInt())
+                            if (n < 0) break
+                            remaining -= n
+                        }
+                    }
                     continue
                 }
                 onEntry?.invoke(rel)

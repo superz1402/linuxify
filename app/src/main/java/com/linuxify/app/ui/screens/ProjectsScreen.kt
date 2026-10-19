@@ -24,6 +24,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.linuxify.app.maintenance.MaintenanceManager
+import com.linuxify.app.runtime.LinuxRuntime
 import com.linuxify.app.ui.AppViewModel
 import com.linuxify.app.ui.components.EmptyState
 import com.linuxify.app.ui.theme.AppType
@@ -38,6 +40,9 @@ fun ProjectsScreen(
     val state by vm.projectsState.collectAsStateWithLifecycle()
     var showCreate by remember { mutableStateOf(false) }
     var showClone by remember { mutableStateOf(false) }
+    // Per-project cache clearing (issue #23): report -> confirm -> clear.
+    var cacheProject by remember { mutableStateOf<String?>(null) }
+    var cacheReport by remember { mutableStateOf<MaintenanceManager.Report?>(null) }
 
     LaunchedEffect(Unit) { vm.refreshProjects() }
 
@@ -107,6 +112,10 @@ fun ProjectsScreen(
                                     vm.requestFilesInProject(p.name)
                                     onBrowseFiles()
                                 }) { Text("Browse files") }
+                                TextButton(onClick = {
+                                    cacheProject = p.name
+                                    vm.projectCacheReport(p.name) { cacheReport = it }
+                                }) { Text("Clear caches") }
                             }
                         }
                     }
@@ -130,6 +139,65 @@ fun ProjectsScreen(
                 }
             }
         }
+    }
+
+    // ---- per-project cache report/confirm dialog (issue #23) ----
+    val report = cacheReport
+    if (cacheProject != null && report != null) {
+        AlertDialog(
+            onDismissRequest = { cacheProject = null; cacheReport = null },
+            title = { Text("Clear caches in “${cacheProject}”? ") },
+            text = {
+                Column {
+                    if (report.items.isEmpty()) {
+                        Text("No cache directories found in this project.")
+                    }
+                    report.items.forEach { item ->
+                        Text(
+                            "${item.label} — ${LinuxRuntime.humanSize(item.bytes)}",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    if (report.hasClearable) {
+                        Text(
+                            "Total: ${LinuxRuntime.humanSize(report.totalBytes)}",
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                    }
+                    Text(
+                        "Only recognized cache directories are removed (__pycache__, .pytest_cache, .cache, node_modules/.cache, …). Project files and .git are never touched.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = report.hasClearable,
+                    onClick = {
+                        val name = cacheProject!!
+                        val dirs = report.items.map { it.target }
+                        cacheProject = null
+                        cacheReport = null
+                        vm.clearProjectCaches(name, dirs) { vm.showMessage(it) }
+                    },
+                ) { Text("Clear") }
+            },
+            dismissButton = {
+                TextButton(onClick = { cacheProject = null; cacheReport = null }) { Text("Cancel") }
+            },
+        )
+    } else if (cacheProject != null) {
+        // report still computing — small blocking dialog so a double tap can't lose it
+        AlertDialog(
+            onDismissRequest = { cacheProject = null },
+            title = { Text("Scanning caches…") },
+            text = { Text("${cacheProject}") },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { cacheProject = null }) { Text("Cancel") } },
+        )
     }
 
     if (showCreate) {

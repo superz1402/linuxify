@@ -23,6 +23,16 @@ object RuntimeDirs {
     fun prootTmpDir(ctx: Context): File = File(runtimeDir(ctx), "proot-tmp").apply { mkdirs() }
 
     /**
+     * Terminal session persistence area (runtime/terminal): per-session
+     * transcript logs (`<id>.log`) plus the `sessions.json` index holding
+     * session metadata (start dir, timestamps, exit). Written by
+     * TerminalPersistence; survives process death so terminal history can be
+     * restored read-only on the next launch. Nothing here is auto-deleted —
+     * the user removes history explicitly (Terminal screen or Settings).
+     */
+    fun terminalDir(ctx: Context): File = File(runtimeDir(ctx), "terminal").apply { mkdirs() }
+
+    /**
      * Private directory holding linker "shims": symlinks named exactly like
      * the sonames the bionic linker requests (e.g. `libtalloc.so.2`) pointing
      * at the packaged `lib*.so` equivalents. Prepended to LD_LIBRARY_PATH by

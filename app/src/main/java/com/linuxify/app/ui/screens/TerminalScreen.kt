@@ -7,6 +7,11 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.InputMethodManager
 import android.widget.Toast
+import java.io.File
+import java.io.RandomAccessFile
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -20,6 +25,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -50,6 +59,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.linuxify.app.R
 import com.linuxify.app.terminal.PtyTerminal
+import com.linuxify.app.terminal.TerminalPersistence
 import com.linuxify.app.terminal.TerminalSessionRegistry
 import com.linuxify.app.terminal.TerminalLogShare
 import com.linuxify.app.runtime.CrashReporter
@@ -82,6 +92,11 @@ import kotlin.math.roundToInt
  *  - Share log: a small translucent floating button (bottom-right) captures
  *    the full transcript — scrollback AND screen — and opens the Android
  *    share sheet, so the log can be handed to any chat/AI app in two taps.
+ *  - History (issue #23): every session's transcript is continuously saved to
+ *    disk (TerminalPersistence). Sessions from previous app runs appear after
+ *    the live tabs as dimmed, read-only tabs with their start time — nothing
+ *    is wiped until the user deletes it. Each history tab offers "New shell
+ *    in this directory" and a delete action.
  */
 @Composable
 fun TerminalScreen(vm: AppViewModel) {
@@ -124,7 +139,9 @@ fun TerminalScreen(vm: AppViewModel) {
                 workdir = workdir ?: "/root",
                 initialCommand = initial,
             )
-            TerminalSessionRegistry.add(context, s)
+            // The start directory is persisted with the session record
+            // (issue #23) so history can offer "new shell in this directory".
+            TerminalSessionRegistry.add(context, s, workdir ?: "/root")
             selected = sessions.size - 1
             spawnError = null
         } catch (t: Throwable) {
@@ -133,13 +150,21 @@ fun TerminalScreen(vm: AppViewModel) {
         }
     }
 
+    // Terminal history from PREVIOUS app runs (issue #23): loaded once per
+    // process start, re-read after delete/clear actions. Ended sessions from
+    // THIS process stay in the live list ("(ended)" tabs) until the process
+    // exits; their transcripts are already on disk either way.
+    var history by remember { mutableStateOf(TerminalPersistence.history()) }
+
     LaunchedEffect(Unit) {
         // A pending "open terminal in project" request spawns a NEW session in
         // that directory even when other sessions exist — it is an explicit
         // user action. A plain visit to the tab keeps the old behavior:
         // reattach to the existing sessions, spawn only when there are none.
+        // (With history present, an empty live list is still fine — the user
+        // sees their history instead of an empty screen, so no auto-spawn.)
         val requestedWorkdir = vm.consumePendingTerminalWorkdir()
-        if (jniError == null && (requestedWorkdir != null || sessions.isEmpty())) {
+        if (jniError == null && (requestedWorkdir != null || (sessions.isEmpty() && history.isEmpty()))) {
             spawnSession(workdir = requestedWorkdir)
         }
         // ended-session events refresh the tab labels
@@ -187,8 +212,11 @@ fun TerminalScreen(vm: AppViewModel) {
                 )
             }
             else -> {
+                // Combined tab row (issue #23): live sessions first, then the
+                // persisted history of PREVIOUS runs as dimmed read-only tabs.
                 SessionTabs(
                     sessions = sessions,
+                    history = history,
                     selected = selected,
                     onSelect = { selected = it },
                     onNewSession = { spawnSession() },
@@ -196,20 +224,39 @@ fun TerminalScreen(vm: AppViewModel) {
                     refreshTick = refreshTick,
                 )
 
-                if (sessions.isEmpty()) {
-                    Surface(Modifier.weight(1f).fillMaxWidth()) {
-                        Column(
-                            Modifier
-                                .fillMaxSize()
-                                .background(TermuxTerminalBackground)
-                                .padding(16.dp),
-                            verticalArrangement = Arrangement.Center,
-                        ) {
-                            Text("No sessions", style = MaterialTheme.typography.titleMedium, color = TermuxForeground)
-                            TextButton(onClick = { spawnSession() }) { Text("Start shell") }
+                val combinedCount = sessions.size + history.size
+                when {
+                    combinedCount == 0 -> {
+                        Surface(Modifier.weight(1f).fillMaxWidth()) {
+                            Column(
+                                Modifier
+                                    .fillMaxSize()
+                                    .background(TermuxTerminalBackground)
+                                    .padding(16.dp),
+                                verticalArrangement = Arrangement.Center,
+                            ) {
+                                Text("No sessions", style = MaterialTheme.typography.titleMedium, color = TermuxForeground)
+                                TextButton(onClick = { spawnSession() }) { Text("Start shell") }
+                            }
                         }
                     }
-                } else {
+                    selected >= sessions.size -> {
+                        // Read-only history pane (issue #23): the transcript of a
+                        // session from a previous run, loaded lazily from disk.
+                        val safeIndex = selected.coerceIn(sessions.size, combinedCount - 1)
+                        val rec = history[safeIndex - sessions.size]
+                        HistoryPane(
+                            record = rec,
+                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                            onNewShellHere = { spawnSession(workdir = rec.workdir) },
+                            onDelete = {
+                                TerminalPersistence.deleteHistory(context, rec.id)
+                                history = TerminalPersistence.history()
+                                selected = (sessions.size - 1).coerceAtLeast(0)
+                            },
+                        )
+                    }
+                    else -> {
                     val safeIndex = selected.coerceIn(0, sessions.size - 1)
                     val session = sessions[safeIndex]
 
@@ -264,24 +311,28 @@ fun TerminalScreen(vm: AppViewModel) {
                             onTap = { shareTranscript(context, session, "sh ${safeIndex + 1}") },
                         )
                     }
+                    }
                 }
 
-                ExtraKeys(
-                    onKey = { bytes -> sessions.getOrNull(selected)?.write(bytes, 0, bytes.size) },
-                    onKeyWithModifiers = { name, bytes ->
-                        var payload = bytes
-                        // sticky CTRL: control-maps plain chars and CSI sequences (Termux behavior)
-                        if (ctrlDown.value) payload = applyCtrl(payload, name)
-                        if (altDown.value) payload = byteArrayOf(0x1b) + payload
-                        sessions.getOrNull(selected)?.write(payload, 0, payload.size)
-                        ctrlDown.value = false
-                        altDown.value = false
-                    },
-                    ctrlDown = ctrlDown.value,
-                    altDown = altDown.value,
-                    onCtrl = { ctrlDown.value = !ctrlDown.value },
-                    onAlt = { altDown.value = !altDown.value },
-                )
+                // Extra keys belong to a LIVE session — hidden on history tabs.
+                if (selected < sessions.size) {
+                    ExtraKeys(
+                        onKey = { bytes -> sessions.getOrNull(selected)?.write(bytes, 0, bytes.size) },
+                        onKeyWithModifiers = { name, bytes ->
+                            var payload = bytes
+                            // sticky CTRL: control-maps plain chars and CSI sequences (Termux behavior)
+                            if (ctrlDown.value) payload = applyCtrl(payload, name)
+                            if (altDown.value) payload = byteArrayOf(0x1b) + payload
+                            sessions.getOrNull(selected)?.write(payload, 0, payload.size)
+                            ctrlDown.value = false
+                            altDown.value = false
+                        },
+                        ctrlDown = ctrlDown.value,
+                        altDown = altDown.value,
+                        onCtrl = { ctrlDown.value = !ctrlDown.value },
+                        onAlt = { altDown.value = !altDown.value },
+                    )
+                }
             }
         }
     }
@@ -351,6 +402,7 @@ private fun ShareLogButton(modifier: Modifier = Modifier, onTap: () -> Unit) {
 @Composable
 private fun SessionTabs(
     sessions: List<TerminalSession>,
+    history: List<TerminalPersistence.Record>,
     selected: Int,
     onSelect: (Int) -> Unit,
     onNewSession: () -> Unit,
@@ -377,11 +429,107 @@ private fun SessionTabs(
                 )
             }
         }
+        // History tabs (issue #23): dimmed, labeled with the session start
+        // time — visually distinct from live tabs, clearly past sessions.
+        val timeFmt = remember { SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()) }
+        history.forEachIndexed { h, rec ->
+            val idx = sessions.size + h
+            val label = timeFmt.format(Date(rec.startedMs))
+            TextButton(onClick = { onSelect(idx) }, modifier = Modifier.height(30.dp)) {
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = if (idx == selected) TermuxKeyForeground.copy(alpha = 0.75f) else TermuxForeground.copy(alpha = 0.22f),
+                )
+            }
+        }
         Spacer(Modifier.weight(1f))
         TextButton(onClick = onNewSession, modifier = Modifier.height(30.dp)) {
             Text("+", style = MaterialTheme.typography.titleMedium, color = TermuxForeground)
         }
     }
+}
+
+/**
+ * Read-only transcript pane for a session from a previous run (issue #23).
+ * Loads the log lazily (tail-capped at [HISTORY_TAIL_BYTES] — a long-running
+ * session's log can grow large); shows the session metadata and offers a new
+ * shell in the same directory plus an explicit delete. Nothing here is ever
+ * deleted implicitly.
+ */
+private const val HISTORY_TAIL_BYTES = 512 * 1024
+
+@Composable
+private fun HistoryPane(
+    record: TerminalPersistence.Record,
+    modifier: Modifier = Modifier,
+    onNewShellHere: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val timeFmt = remember { SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()) }
+    // Lazy disk read: transcript tail for this record id only.
+    var text by remember(record.id) { mutableStateOf<String?>(null) }
+    LaunchedEffect(record.id) {
+        text = withContext(Dispatchers.IO) {
+            val f = TerminalPersistence.logFile(com.linuxify.app.LinuxifyApp.instance, record.id)
+            readTranscriptTail(f)
+        }
+    }
+
+    Column(modifier.background(TermuxTerminalBackground)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+            Text(
+                "Terminal history",
+                style = MaterialTheme.typography.titleMedium,
+                color = TermuxForeground,
+            )
+            Text(
+                listOfNotNull(
+                    timeFmt.format(Date(record.startedMs)),
+                    record.workdir.takeIf { it != "/root" },
+                    when {
+                        record.isFinished -> "ended (exit ${record.exitCode ?: "unknown"})"
+                        else -> "interrupted"
+                    },
+                ).joinToString("  ·  "),
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = TermuxForeground.copy(alpha = 0.6f),
+            )
+        }
+        Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = onNewShellHere) { Text("New shell in this directory") }
+            TextButton(onClick = onDelete) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+        }
+        Text(
+            text ?: "Loading transcript…",
+            style = TextStyle(fontSize = 12.sp, fontFamily = FontFamily.Monospace),
+            color = TermuxForeground.copy(alpha = 0.85f),
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        )
+    }
+}
+
+/** Last [maxBytes] of a transcript file, dropped mid-line at the cut. */
+private fun readTranscriptTail(file: File, maxBytes: Int = HISTORY_TAIL_BYTES): String {
+    if (!file.isFile) return "(transcript not saved)"
+    return runCatching {
+        RandomAccessFile(file, "r").use { raf ->
+            val len = raf.length()
+            val start = (len - maxBytes).coerceAtLeast(0)
+            raf.seek(start)
+            val buf = ByteArray((len - start).toInt().coerceAtMost(maxBytes))
+            raf.readFully(buf)
+            var s = String(buf, Charsets.UTF_8)
+            if (start > 0) s = s.lineSequence().drop(1).joinToString("\n")
+            s
+        }
+    }.getOrElse { "(could not read transcript: ${it.message})" }
 }
 
 /** Apply sticky CTRL to an extra-key payload, mirroring what a real keyboard does. */

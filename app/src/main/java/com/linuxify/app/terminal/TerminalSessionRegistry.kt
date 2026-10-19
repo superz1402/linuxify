@@ -29,8 +29,16 @@ object TerminalSessionRegistry {
 
     val client: LinuxifySessionClient by lazy { LinuxifySessionClient(LinuxifyApp.instance) }
 
-    fun add(ctx: Context, session: TerminalSession) {
+    /**
+     * Adds the session AND registers it with [TerminalPersistence] (issue #23):
+     * every session gets an on-disk record + transcript log under
+     * filesDir/runtime/terminal, updated continuously while it runs.
+     * [workdir] is the guest path the shell was spawned in — remembered so
+     * history can offer "start a shell in the same directory".
+     */
+    fun add(ctx: Context, session: TerminalSession, workdir: String = "/root") {
         sessions.add(session)
+        TerminalPersistence.register(ctx, session, workdir)
         // A live session exists — the process must survive backgrounding.
         RuntimeForegroundService.start(ctx)
     }
@@ -39,12 +47,19 @@ object TerminalSessionRegistry {
 
     /** Removes an ended session from the list (closes its tab). */
     fun remove(session: TerminalSession) {
+        TerminalPersistence.forget(LinuxifyApp.instance, session)
         sessions.remove(session)
         RuntimeForegroundService.stopIfIdle(LinuxifyApp.instance)
     }
 
     fun stopEverythingAndRelease() {
-        sessions.forEach { s -> runCatching { s.finishIfRunning() } }
+        sessions.forEach { s ->
+            runCatching {
+                val exit = try { if (s.isRunning) null else s.exitStatus } catch (_: Exception) { null }
+                TerminalPersistence.finalizeSession(LinuxifyApp.instance, s, exit)
+                s.finishIfRunning()
+            }
+        }
         sessions.clear()
         RuntimeForegroundService.stopIfIdle(LinuxifyApp.instance)
     }
@@ -74,6 +89,9 @@ class LinuxifySessionClient(private val context: Context) : TerminalSessionClien
     }
 
     override fun onTextChanged(changedSession: TerminalSession) {
+        // Persistence (issue #23): flag the transcript as changed — the 10s
+        // sweep / ON_STOP flush does the actual disk write (throttled).
+        TerminalPersistence.markDirty(changedSession)
         redraw(changedSession)
     }
 
@@ -89,6 +107,8 @@ class LinuxifySessionClient(private val context: Context) : TerminalSessionClien
         } catch (_: Exception) {
             -1
         }
+        // Persistence (issue #23): final transcript snapshot + record close.
+        TerminalPersistence.finalizeSession(context, finishedSession, code)
         RuntimeNotifier.runCompleted(
             context,
             title = "Run completed — $label ended",

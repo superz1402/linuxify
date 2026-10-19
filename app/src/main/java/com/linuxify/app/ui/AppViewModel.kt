@@ -2,6 +2,7 @@ package com.linuxify.app.ui
 
 import android.app.Application
 import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.linuxify.app.pkg.AptManager
@@ -10,6 +11,9 @@ import com.linuxify.app.pkg.EnvCore
 import com.linuxify.app.pkg.EnvManager
 import com.linuxify.app.pkg.SoftwareManager
 import com.linuxify.app.proj.ProjectsManager
+import com.linuxify.app.backup.BackupManager
+import com.linuxify.app.maintenance.CacheTargets
+import com.linuxify.app.maintenance.MaintenanceManager
 import com.linuxify.app.runtime.CrashReporter
 import com.linuxify.app.runtime.GuestPatches
 import com.linuxify.app.runtime.LinuxRuntime
@@ -17,6 +21,7 @@ import com.linuxify.app.runtime.RootfsInstaller
 import com.linuxify.app.runtime.RuntimeDirs
 import com.linuxify.app.runtime.RuntimeMetadata
 import com.linuxify.app.srv.ServiceManager
+import com.linuxify.app.terminal.TerminalPersistence
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -39,6 +44,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val software = SoftwareManager(app, apt, env)
     val projects = ProjectsManager(app)
     val services = ServiceManager(app)
+    val maintenance = MaintenanceManager(app)
+    val backup = BackupManager(app)
 
     private val ctx: Context get() = getApplication<Application>()
 
@@ -72,6 +79,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val abi: String = android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown",
         val rootfsSizeBytes: Long = 0,
         val projectsCount: Int = 0,
+        val projectsSizeBytes: Long = 0,
+        val terminalLogsBytes: Long = 0,
+        val appCacheBytes: Long = 0,
         val installedPackages: Int? = null,
         val freeBytes: Long = 0,
         val deviceModel: String = android.os.Build.MODEL,
@@ -86,6 +96,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val storageWarning: StateFlow<String?> = _storageWarning
 
     init {
+        // Terminal history (issue #23): load the session index BEFORE any
+        // screen can spawn/register sessions, so previous-run records are in
+        // memory when the Terminal screen reads TerminalPersistence.history().
+        runCatching { TerminalPersistence.loadFromDisk(getApplication()) }
+            .onFailure { CrashReporter.logNonFatal(getApplication(), "TerminalPersistence.loadFromDisk", it) }
         // Idempotent in-place upgrade for an ALREADY-extracted rootfs: group
         // resolution + sudo-as-admin marker + profile bell hook (alpha.11).
         // Runs on every start; a fully-patched rootfs makes it a cheap no-op.
@@ -111,6 +126,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 kotlinx.coroutines.delay(30_000)
             }
         }
+        viewModelScope.launch(Dispatchers.IO + bgGuard) {
+            // Terminal transcript persistence loop (issue #23): snapshot dirty
+            // sessions every 10s — the disk write itself is throttled to once
+            // per 3s per session and skipped entirely when unchanged.
+            while (true) {
+                kotlinx.coroutines.delay(10_000)
+                runCatching { TerminalPersistence.sweep(ctx) }
+                    .onFailure { CrashReporter.logNonFatal(getApplication(), "TerminalPersistence.sweep", it) }
+            }
+        }
     }
 
     fun refreshHomeFacts() {
@@ -125,6 +150,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         version = RuntimeMetadata.DISTRO_VERSION,
                         rootfsSizeBytes = RuntimeDirs.sizeRecursively(rootfs),
                         projectsCount = RuntimeDirs.projectsDir(ctx).listFiles()?.count { it.isDirectory } ?: 0,
+                        projectsSizeBytes = CacheTargets.sizeOfDirSafe(RuntimeDirs.projectsDir(ctx)),
+                        terminalLogsBytes = CacheTargets.sizeOfDirSafe(RuntimeDirs.terminalDir(ctx)),
+                        appCacheBytes = CacheTargets.sizeOfDirSafe(ctx.cacheDir),
                         installedPackages = try { apt.installedCount() } catch (_: Exception) { null },
                         freeBytes = RuntimeDirs.availableBytes(ctx),
                         prootOk = RuntimeDirs.prootAvailable(ctx),
@@ -167,6 +195,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _projectsState = MutableStateFlow(ProjectsUiState())
     val projectsState: StateFlow<ProjectsUiState> = _projectsState
+
+    /** Surface a transient message on the Projects screen (used by cache clearing). */
+    fun showMessage(text: String) {
+        _projectsState.value = _projectsState.value.copy(message = text)
+    }
 
     // ---- Cross-screen "open in" requests (issue #22) ----
     // Projects hands a target directory to the Terminal / Files screens via
@@ -425,14 +458,162 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // ---- Settings / storage ----
+    // ---- Settings / storage: maintenance, backup & restore (issue #23) ----
 
-    fun clearAptCaches(onDone: (String) -> Unit) {
+    /** Guard: is a rootfs install currently running (downloads/staging in use)? */
+    private fun installerBusy(): Boolean {
+        val s = installer.state.value
+        return s is RootfsInstaller.InstallState.Checking ||
+            s is RootfsInstaller.InstallState.Downloading ||
+            s is RootfsInstaller.InstallState.Verifying ||
+            s is RootfsInstaller.InstallState.Extracting ||
+            s is RootfsInstaller.InstallState.Configuring ||
+            s is RootfsInstaller.InstallState.VerifyingInstall
+    }
+
+    // -- per-project caches (Projects screen) --
+
+    fun projectCacheReport(name: String, onDone: (MaintenanceManager.Report?) -> Unit) {
         viewModelScope.launch(Dispatchers.IO + bgGuard) {
-            val archives = File(RuntimeDirs.rootfsDir(ctx), "var/cache/apt/archives")
-            var freed = 0L
-            archives.listFiles()?.forEach { f -> if (f.isFile && f.name.endsWith(".deb")) { freed += f.length(); f.delete() } }
-            onDone("Freed ${LinuxRuntime.humanSize(freed)} of cached packages")
+            val report = runCatching { maintenance.projectReport(name) }
+                .onFailure { CrashReporter.logNonFatal(getApplication(), "projectCacheReport", it) }
+                .getOrNull()
+            withContext(kotlinx.coroutines.Dispatchers.Main) { onDone(report) }
+        }
+    }
+
+    fun clearProjectCaches(name: String, dirs: List<File>, onDone: (String) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO + bgGuard) {
+            val freed = runCatching { maintenance.clearProjectCaches(name, dirs) }
+                .onFailure { CrashReporter.logNonFatal(getApplication(), "clearProjectCaches", it) }
+                .getOrDefault(0L)
+            refreshHomeFacts()
+            withContext(kotlinx.coroutines.Dispatchers.Main) {
+                onDone("Cleared project caches: ${LinuxRuntime.humanSize(freed)} freed")
+            }
+        }
+    }
+
+    // -- system caches (Settings screen) --
+
+    fun systemCacheReport(onDone: (MaintenanceManager.Report?) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO + bgGuard) {
+            val report = runCatching {
+                maintenance.systemReport(
+                    liveSessions = TerminalSessionRegistryLive(),
+                    installerBusy = installerBusy(),
+                )
+            }.onFailure { CrashReporter.logNonFatal(getApplication(), "systemCacheReport", it) }
+                .getOrNull()
+            withContext(kotlinx.coroutines.Dispatchers.Main) { onDone(report) }
+        }
+    }
+
+    fun clearSystemCaches(items: List<MaintenanceManager.CacheItem>, onDone: (String) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO + bgGuard) {
+            val freed = runCatching { maintenance.clearSystem(items) }
+                .onFailure { CrashReporter.logNonFatal(getApplication(), "clearSystemCaches", it) }
+                .getOrDefault(0L)
+            refreshHomeFacts()
+            withContext(kotlinx.coroutines.Dispatchers.Main) {
+                onDone("Cleared ${LinuxRuntime.humanSize(freed)} of caches")
+            }
+        }
+    }
+
+    /** Terminal live-session check that never touches the UI thread. */
+    private fun TerminalSessionRegistryLive(): Boolean =
+        runCatching { com.linuxify.app.terminal.TerminalSessionRegistry.hasLiveSessions() }.getOrDefault(false)
+
+    // -- backup & restore --
+
+    data class BackupUiState(
+        val busy: Boolean = false,
+        val progress: String? = null,
+        val message: String? = null,
+    )
+
+    private val _backupState = MutableStateFlow(BackupUiState())
+    val backupState: StateFlow<BackupUiState> = _backupState
+
+    fun createBackup(uri: Uri, includeRootfs: Boolean) {
+        viewModelScope.launch(Dispatchers.IO + bgGuard) {
+            _backupState.value = BackupUiState(busy = true, progress = "preparing…")
+            val scopes = buildSet {
+                add(BackupManager.Scope.PROJECTS)
+                add(BackupManager.Scope.TERMINAL)
+                if (includeRootfs) add(BackupManager.Scope.ROOTFS)
+            }
+            val result = runCatching {
+                ctx.contentResolver.openOutputStream(uri)?.use { out ->
+                    backup.createBackup(out, scopes) { p ->
+                        _backupState.value = _backupState.value.copy(progress = p)
+                    }
+                } ?: throw IllegalStateException("could not open the selected location for writing")
+            }.getOrElse { Result.failure(it) }
+            result.fold(
+                { m ->
+                    _backupState.value = BackupUiState(
+                        busy = false,
+                        message = "Backup created — projects: ${m.projectNames.size}, terminal sessions: ${m.terminalCount}" +
+                            if (m.rootfsIncluded) ", Linux environment included" else "",
+                    )
+                },
+                { e ->
+                    CrashReporter.logNonFatal(getApplication(), "createBackup", e)
+                    _backupState.value = BackupUiState(busy = false, message = "Backup failed: ${e.message ?: e.javaClass.simpleName}")
+                },
+            )
+            refreshHomeFacts()
+        }
+    }
+
+    fun inspectBackup(uri: Uri, onReady: (BackupManager.Manifest) -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO + bgGuard) {
+            runCatching {
+                ctx.contentResolver.openInputStream(uri)?.use { input ->
+                    backup.readManifest(input)
+                } ?: throw IllegalStateException("could not open the selected file")
+            }.getOrElse { Result.failure(IllegalStateException("reader closed", it)) }.fold(
+                { m -> withContext(kotlinx.coroutines.Dispatchers.Main) { onReady(m) } },
+                { e ->
+                    CrashReporter.logNonFatal(getApplication(), "inspectBackup", e)
+                    withContext(kotlinx.coroutines.Dispatchers.Main) { onError(e.message ?: e.javaClass.simpleName) }
+                },
+            )
+        }
+    }
+
+    fun restoreBackup(uri: Uri, scopes: Set<BackupManager.Scope>, replaceProjects: Boolean) {
+        viewModelScope.launch(Dispatchers.IO + bgGuard) {
+            _backupState.value = BackupUiState(busy = true, progress = "preparing…")
+            val result = runCatching {
+                // Rootfs scope needs exclusive access to the environment.
+                if (BackupManager.Scope.ROOTFS in scopes) {
+                    _backupState.value = _backupState.value.copy(progress = "stopping services & sessions…")
+                    runCatching { services.shutdownAll() }
+                    runCatching { com.linuxify.app.terminal.TerminalSessionRegistry.stopEverythingAndRelease() }
+                }
+                ctx.contentResolver.openInputStream(uri)?.use { input ->
+                    backup.restore(input, BackupManager.RestoreOptions(scopes, replaceProjects)) { p ->
+                        _backupState.value = _backupState.value.copy(progress = p)
+                    }
+                } ?: throw IllegalStateException("could not open the selected file")
+            }.getOrElse { Result.failure(IllegalStateException("reader closed", it)) }
+            result.fold(
+                { summary ->
+                    // Terminal scope replaced the on-disk index — reload it so
+                    // the in-memory view matches (only possible because the
+                    // restore of terminal scope does not touch live sessions).
+                    runCatching { TerminalPersistence.loadFromDisk(ctx) }
+                    _backupState.value = BackupUiState(busy = false, message = summary)
+                },
+                { e ->
+                    CrashReporter.logNonFatal(getApplication(), "restoreBackup", e)
+                    _backupState.value = BackupUiState(busy = false, message = "Restore failed: ${e.message ?: e.javaClass.simpleName}")
+                },
+            )
+            refreshHomeFacts()
         }
     }
 
