@@ -1,8 +1,59 @@
 # SESSION_STATE.md — Linuxify Android
 
-Concise handoff for the next agent session. Current as of 2026-10-19 (Task 22 —
-Projects screen fixes on main: nav tab rule, open-in-project plumbing, batched
-git probe; origin/main = 459505c).
+Concise handoff for the next agent session. Current as of 2026-10-19 (Task 23 —
+durable persistence, backup/restore, cache management on main: terminal
+transcripts on disk, SAF tar.gz backup/restore, report-then-confirm cache
+clearing; origin/main = d0b3a73).
+
+## COMPLETED TASK — issue #23: persistence, backup/restore, cache management (on main)
+
+- USER REQUEST: (1) keep projects + terminals + everything on local storage so
+  nothing is wiped until the user does it; (2) a backup & restore system;
+  (3) cache clearing per project and for the whole system.
+- PERSISTENCE: projects/rootfs/services were ALREADY durable in filesDir
+  (survive restart/reboot; wiped only by uninstall / system clear-data /
+  in-app Reset) — unchanged. The gap was TERMINALS: sessions were in-memory
+  only. New terminal/TerminalPersistence.kt writes every session's transcript
+  (scrollback+screen, via TerminalBuffer.getTranscriptText) to
+  filesDir/runtime/terminal/<id>.log plus a sessions.json index (id, start
+  dir, started/ended, exit). Write schedule: markDirty on onTextChanged,
+  snapshots throttled to 3s/session (skipped when transcript unchanged), 10s
+  sweep loop in AppViewModel, flushAll on app ON_STOP (MainActivity observer),
+  final write on session finish. Restore is read-only history tabs (honest
+  maximum: a pty cannot reattach across process death) with per-entry delete
+  + "New shell in this directory". NOTHING is auto-deleted.
+- BACKUP/RESTORE: backup/BackupManager.kt writes manifest-first .tar.gz
+  (commons-compress; entry paths relative to filesDir; POSIX modes 0755/0644
+  +exec; symlinks preserved by pure BackupTar). Manifest-first means SAF
+  inspection reads entry #1 only (no full decompression). Scopes: projects +
+  terminal history always, rootfs optional (large/slow). Restore = one
+  SafeTarExtractor pass into filesDir with a NEW optional skipEntry filter
+  (installer path untouched); projects skip-existing or overwrite (names from
+  manifest); rootfs scope stops services+sessions, deletes rootfs, extracts,
+  restores/synthesizes runtime/install.json ready marker. UI in Settings with
+  CreateDocument/OpenDocument launchers (no storage permissions needed).
+- CACHE: maintenance/CacheTargets.kt (pure, tested) finds only recognized
+  cache dirs per project (__pycache__, .pytest_cache, .mypy_cache,
+  .ruff_cache, .ipynb_checkpoints, .cache, .gradle, node_modules/.cache,
+  .next/cache) — .git never descended, symlinks never followed/deleted,
+  depth cap 8; build/dist/venv/vendor untouched. maintenance/
+  MaintenanceManager.kt: per-project report+clear and system report+clear
+  (APT archives, /root/.cache, npm _cacache, app cacheDir, proot temp
+  blocked while sessions live, downloads/staging blocked while installer
+  busy). Both flows REPORT exact dirs + bytes first, delete only on explicit
+  confirm, contents-only deletion. Settings storage card shows sizes
+  (rootfs/projects/terminal-history/app-cache/free).
+- VERIFICATION: 144/144 unit tests (+14: CacheTargetsTest 7,
+  BackupRoundTripTest 4 incl. write->SafeTarExtractor round-trip with mode +
+  symlink fidelity, TerminalRecordTest 3); lintRelease PASS; assembleRelease
+  PASS (0.1.0-alpha.15, versionCode 15, APK
+  bb40ef63c643436f0527cf7e36ac9bbabe2813803b65b9f6dd1d03beb34e4177).
+- COMMITS: feature/persistence-backup-cache d0b3a73 pushed, fast-forward
+  merged to main, pushed; ls-remote verified both at d0b3a73.
+- Device drill pending: run terminal, background, force-stop, relaunch ->
+  history tab shows transcript; create backup (with and without rootfs),
+  uninstall, reinstall, restore; per-project and system cache clears report
+  expected bytes.
 
 ## COMPLETED TASK — issue #22: Projects screen fixes (on main)
 
