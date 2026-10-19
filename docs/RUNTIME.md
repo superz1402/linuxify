@@ -166,13 +166,35 @@ is the vendored `terminal-emulator`/`terminal-view` code, rendered through a Com
 
 ## Licensing
 
-- proot: GPLv3+ (bundled binary, provenance recorded).
-- Termux terminal-emulator / terminal-view / libtermux.so: Apache-2.0 origin
-  (jackpal/Android-Terminal-Emulator) distributed inside termux-app; notice file at
+(Corrected by the licensing audit, issue #21 — full analysis and evidence in
+`docs/PROPRIETARY_DISTRIBUTION_AUDIT.md`; distribution-facing notices in
+`docs/THIRD_PARTY_NOTICES.md`.)
+
+- proot (libproot.so / libproot-loader.so): **GPL-2.0-or-later** — source-file
+  headers at the pinned tag `termux/proot@v5.1.107.96` say "version 2 … or
+  (at your option) any later version"; the Termux package metadata says
+  GPL-2.0. (An earlier revision of this page wrongly said "GPLv3+".) The
+  binaries are modified post-build (DT_NEEDED rewrite) — corresponding-source
+  recipe in `docs/THIRD_PARTY_NOTICES.md`.
+- Termux terminal-emulator / terminal-view / libtermux.so: **GPL-3.0-only**
+  as published by termux-app v0.118.0 (`LICENSE.md`). The jackpal/
+  Android-Terminal-Emulator Apache-2.0 lineage recorded there is an origin/
+  attribution note, not a regrant — these files may not be used in a
+  proprietary app without written permission from the upstream copyright
+  holders. Upstream statement preserved verbatim in
   `docs/THIRD_PARTY_TERMUX_LICENSE.md`.
-- Ubuntu base rootfs: Ubuntu layer of Ubuntu cloud images (CC-BY-SA 3.0 for the
-  Ubuntu logo assets; base image contents under their respective licenses).
-- This application: GPL-3.0-or-later (compatible with the GPL proot dependency).
+- libtalloc.so: **LGPL-3.0** (talloc 2.5.0 tarball `LICENSE`; the Termux
+  package metadata field says "GPL-3.0", which is imprecise). Linked by proot
+  only.
+- libshmem.so (libandroid-shmem 0.7): **BSD-3-Clause**. Linked by proot only.
+- Ubuntu base rootfs: NOT bundled — downloaded at runtime from
+  cdimage.ubuntu.com and verified against Ubuntu's published SHA256SUMS; its
+  contents remain under Ubuntu's own package licences and are never
+  distributed by Linuxify. (Ubuntu logo assets inside the image are
+  CC-BY-SA 3.0 where present.)
+- This application: GPL-3.0-or-later (see root `LICENSE`). Full third-party
+  inventory: `docs/THIRD_PARTY_NOTICES.md` (also bundled in the APK under
+  `assets/licenses/`, visible in-app via Settings → Third-party licences).
 
 ## Verification status (honest labels)
 

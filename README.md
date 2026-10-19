@@ -75,5 +75,12 @@ Requirements: JDK 17+ (21 tested), Android SDK platform 35, build-tools 35.0.0.
 
 ## License
 
-GPL-3.0-or-later. Bundles GPLv3 components (Termux terminal-emulator/terminal-view,
-proot) with full attribution in `docs/RUNTIME.md` and `docs/SECURITY.md`.
+GPL-3.0-or-later (see [LICENSE](LICENSE)). Bundles third-party components under
+their own licences (Termux terminal GPL-3.0-only, proot GPL-2.0-or-later,
+talloc LGPL-3.0, libandroid-shmem BSD-3-Clause, AndroidX Apache-2.0) with a
+complete inventory and corresponding-source recipe in
+[docs/THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md) — also bundled in the
+APK (`assets/licenses/`, visible in-app: Settings → Third-party licences).
+Whether and how Linuxify could be distributed under proprietary terms is
+analyzed, from repository evidence, in
+[docs/PROPRIETARY_DISTRIBUTION_AUDIT.md](docs/PROPRIETARY_DISTRIBUTION_AUDIT.md).
