@@ -196,8 +196,12 @@ class SoftwareManager(
                 pushLog("${entry.name} ${result.version ?: ""} verified — command: ${entry.verifyBinary}")
                 setPhase(Phase.DONE)
             } else {
+                // Issue #19: report the REAL exit code — the version line is
+                // output, not an exit status, and a 0-exit with blank output
+                // must not be called "nonzero".
                 fail(
-                    "Installed but '${entry.verifyBinary}' did not run (exit ${result.version ?: "nonzero"}). " +
+                    "Installed but '${entry.verifyBinary}' did not run (exit ${result.exitCode ?: "exec failed"}). " +
+                        (result.version?.let { "Last output: $it. " } ?: "") +
                         "Recovery: try again once; if it persists, install it manually in a terminal (the terminal is always unrestricted).",
                 )
             }
@@ -333,7 +337,12 @@ class SoftwareManager(
                 }
                 is InstallSpec.Binary -> {
                     val target = File(RuntimeDirs.rootfsDir(ctx), "usr/local/bin/${spec.binaryName}")
-                    runCatching { target.delete() && !target.exists() }.getOrDefault(false)
+                    // Idempotent: an already-absent binary is a successful removal
+                    // (File.delete() returns false for absent files — issue #18).
+                    runCatching {
+                        target.delete()
+                        !target.exists()
+                    }.getOrDefault(false)
                 }
             }
             if (ok) {
@@ -353,7 +362,7 @@ class SoftwareManager(
             LinuxRuntime.ExecResult(-1, "", it.message ?: "exec failed", false)
         }
         val ok = EnvCore.verifyPassed(res.exitCode, res.stdout)
-        return EnvManager.VerifyResult(entry.verifyBinary, ok, EnvCore.firstVersionLine(res.stdout))
+        return EnvManager.VerifyResult(entry.verifyBinary, ok, EnvCore.firstVersionLine(res.stdout), res.exitCode)
     }
 }
 
