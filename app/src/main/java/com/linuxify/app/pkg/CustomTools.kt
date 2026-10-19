@@ -18,6 +18,15 @@ object CustomTools {
     private val ID_RE = Regex("^[a-z0-9][a-z0-9._-]{0,63}$")
     private val PKG_RE = Regex("^[A-Za-z0-9][A-Za-z0-9.@/_+-]{0,127}$")
 
+    /** npm scoped packages (@scope/name) — issue #20: a leading '@' is legal for npm only. */
+    private val NPM_SCOPE_RE = Regex("^@[A-Za-z0-9][A-Za-z0-9.@/_+-]{0,126}$")
+
+    /** Is [pkg] a package name the given ecosystem accepts (injection-safe by charset)? */
+    fun isAllowedPackage(ecosystem: String, pkg: String): Boolean = when (ecosystem) {
+        Ecosystems.NPM -> PKG_RE.matches(pkg) || NPM_SCOPE_RE.matches(pkg)
+        else -> PKG_RE.matches(pkg)
+    }
+
     /**
      * Validates and builds a custom entry. Returns null with a human-readable
      * reason in [error] when invalid — the UI surfaces it, never a crash.
@@ -37,8 +46,14 @@ object CustomTools {
             return null
         }
         val id = name.lowercase().replace(' ', '-')
-        if (pkg.isEmpty() || !PKG_RE.matches(pkg)) {
-            error("Package name contains characters APT/npm/pip would reject.")
+        if (pkg.isEmpty() || !isAllowedPackage(ecosystem, pkg)) {
+            error(
+                if (ecosystem == Ecosystems.NPM) {
+                    "Package name must be a valid npm name (scoped names like @scope/pkg are allowed)."
+                } else {
+                    "Package name contains characters APT/npm/pip would reject."
+                },
+            )
             return null
         }
         val binary = rawBinary?.trim()?.takeIf { it.isNotEmpty() }
