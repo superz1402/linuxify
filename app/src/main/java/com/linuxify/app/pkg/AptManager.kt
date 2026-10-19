@@ -96,10 +96,9 @@ class AptManager(private val ctx: Context) {
         run(Operation.Kind.REMOVE, "DEBIAN_FRONTEND=noninteractive apt-get remove -y ${packages.joinToString(" ")}")
 
     suspend fun search(query: String): List<SearchHit> = withContext(Dispatchers.IO) {
-        val safe = query.replace(Regex("[^A-Za-z0-9.+-]"), "")
-        if (safe.isEmpty()) return@withContext emptyList()
+        val command = AptCommands.searchCommand(query) ?: return@withContext emptyList()
         val runtime = LinuxRuntime(ctx)
-        val res = runtime.boundedExec("apt-cache search --names-only '^${Regex.escape(safe)}|${Regex.escape(safe)}' 2>/dev/null | head -40", timeoutMs = 60_000)
+        val res = runtime.boundedExec(command, timeoutMs = 60_000)
         res.stdout.lines()
             .filter { it.isNotBlank() }
             .mapNotNull { line ->
@@ -109,10 +108,16 @@ class AptManager(private val ctx: Context) {
             }
     }
 
+    /**
+     * True when dpkg reports "Status: install ok installed" for [pkg]. Executed
+     * as an explicit argv (no shell) so a hostile package name cannot inject
+     * commands — the old Regex.escape-built shell string was neither shell- nor
+     * ERE-safe and always returned false (issue #13).
+     */
     suspend fun isInstalled(pkg: String): Boolean = withContext(Dispatchers.IO) {
         val runtime = LinuxRuntime(ctx)
-        val res = runtime.boundedExec("dpkg -s ${Regex.escape(pkg)} 2>/dev/null | grep -q '^Status: install ok installed'", timeoutMs = 30_000)
-        res.exitCode == 0
+        val res = runtime.execInRootfs(listOf("dpkg", "-s", pkg), timeoutMs = 30_000)
+        res.exitCode == 0 && AptCommands.hasInstalledStatus(res.stdout)
     }
 
     suspend fun installedCount(): Int? = withContext(Dispatchers.IO) {
@@ -122,4 +127,45 @@ class AptManager(private val ctx: Context) {
     }
 
     data class SearchHit(val name: String, val description: String)
+}
+
+/**
+ * Pure command construction for APT (JVM-unit-tested).
+ *
+ * Issue #13: [Regex.escape] emits PCRE \\Q…\\E quoting, which glibc ERE
+ * (apt-cache's regex engine) treats as literal "Q…E" — ordinary package names
+ * never matched and search always came back empty. ERE quoting must use
+ * backslash escapes for the ERE metacharacters instead.
+ */
+object AptCommands {
+
+    /** Characters special to POSIX ERE (glibc regcomp REG_EXTENDED). */
+    private const val ERE_SPECIALS = ".[]*+?^$|(){}\\"
+
+    /**
+     * Quote [term] for embedding in an ERE: every ERE metacharacter gets a
+     * backslash (a defined literal escape in ERE); ordinary characters pass
+     * through unchanged.
+     */
+    fun ereQuote(term: String): String = buildString {
+        for (c in term) {
+            if (c in ERE_SPECIALS) append('\\')
+            append(c)
+        }
+    }
+
+    /** Keep only characters apt package names can contain; drops shell metacharacters. */
+    fun safeSearchTerm(raw: String): String = raw.replace(Regex("[^A-Za-z0-9.+-]"), "")
+
+    /** Full apt-cache command for a raw UI query, or null when nothing searchable remains. */
+    fun searchCommand(rawTerm: String): String? {
+        val safe = safeSearchTerm(rawTerm)
+        if (safe.isEmpty()) return null
+        val quoted = ereQuote(safe)
+        return "apt-cache search --names-only '^" + quoted + "|" + quoted + "' 2>/dev/null | head -40"
+    }
+
+    /** dpkg -s output says the package is fully installed. */
+    fun hasInstalledStatus(dpkgStatusStdout: String): Boolean =
+        dpkgStatusStdout.lineSequence().any { it.trim() == "Status: install ok installed" }
 }
