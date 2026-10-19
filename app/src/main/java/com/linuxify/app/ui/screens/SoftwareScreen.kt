@@ -69,7 +69,11 @@ fun SoftwareScreen(vm: AppViewModel) {
     val aptRunning = aptOp?.state == AptManager.Operation.State.RUNNING
     val busy = (op?.busy == true) || aptRunning || envState.busy
 
-    LaunchedEffect(filtered.map { it.id }) { vm.refreshCatalogState(filtered) }
+    // Issue #16: probe the STABLE entry set — keying on `filtered` spawned one
+    // proot process per search keystroke (and raced overlapping probes). The
+    // result map is keyed by binary name, so a superset probe serves every
+    // filtered view.
+    LaunchedEffect(allEntries) { vm.refreshCatalogState(allEntries) }
     LaunchedEffect(op?.phase) {
         if (op?.phase == SoftwareManager.Phase.DONE || op?.phase == SoftwareManager.Phase.FAILED) {
             vm.refreshCatalogState(allEntries)
@@ -157,6 +161,41 @@ fun SoftwareScreen(vm: AppViewModel) {
 
                 if (envState.steps.isNotEmpty() || envState.log.isNotEmpty()) {
                     EnvLogBox(envState.steps, envState.log.takeLast(30))
+                }
+            }
+        }
+
+        // ---- APT operation (issue #15: upgrade / search-install / repair
+        //      feedback is visible here — the old screen never rendered it) ----
+        aptOp?.let { a ->
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    ) {
+                        Text(aptKindLabel(a.kind), style = MaterialTheme.typography.titleSmall)
+                        StatusChip(
+                            when (a.state) {
+                                AptManager.Operation.State.RUNNING -> Status.BUSY
+                                AptManager.Operation.State.DONE -> Status.READY
+                                AptManager.Operation.State.FAILED -> Status.FAILED
+                                else -> Status.STOPPED
+                            },
+                        )
+                    }
+                    if (a.state == AptManager.Operation.State.RUNNING) LinearProgressIndicator(Modifier.fillMaxWidth())
+                    if (a.state == AptManager.Operation.State.FAILED && a.exitCode != null) {
+                        Text(
+                            "failed (exit ${a.exitCode}) — full log below",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    if (a.output.isNotEmpty()) {
+                        EnvLogBox(emptyList(), a.output.takeLast(40))
+                    }
                 }
             }
         }
@@ -314,6 +353,16 @@ fun SoftwareScreen(vm: AppViewModel) {
             onClose = { showAddDialog = false },
         )
     }
+}
+
+private fun aptKindLabel(kind: AptManager.Operation.Kind): String = when (kind) {
+    AptManager.Operation.Kind.UPDATE -> "Index refresh (apt update)"
+    AptManager.Operation.Kind.INSTALL -> "APT install"
+    AptManager.Operation.Kind.REMOVE -> "APT remove"
+    AptManager.Operation.Kind.SEARCH -> "APT search"
+    AptManager.Operation.Kind.LIST_INSTALLED -> "Installed packages"
+    AptManager.Operation.Kind.REPAIR -> "Package repair"
+    AptManager.Operation.Kind.UPGRADE -> "Update \u0026 upgrade (apt upgrade)"
 }
 
 @Composable
