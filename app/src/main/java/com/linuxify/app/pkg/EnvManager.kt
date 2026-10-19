@@ -44,7 +44,12 @@ class EnvManager(
 
     data class StepRecord(val id: String, val title: String, val ok: Boolean, val note: String? = null)
 
-    data class VerifyResult(val binary: String, val ok: Boolean, val version: String? = null)
+    data class VerifyResult(
+        val binary: String,
+        val ok: Boolean,
+        val version: String? = null,
+        val exitCode: Int? = null,
+    )
 
     data class EnvState(
         val phase: Phase = Phase.IDLE,
@@ -299,7 +304,7 @@ class EnvManager(
             LinuxRuntime.ExecResult(-1, "", it.message ?: "exec failed", false)
         }
         val ok = EnvCore.verifyPassed(res.exitCode, res.stdout)
-        VerifyResult(tool.binary, ok, EnvCore.firstVersionLine(res.stdout))
+        VerifyResult(tool.binary, ok, EnvCore.firstVersionLine(res.stdout), res.exitCode)
     }
 
     private fun indexIsStale(): Boolean {
