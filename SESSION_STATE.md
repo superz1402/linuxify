@@ -1,8 +1,38 @@
 # SESSION_STATE.md — Linuxify Android
 
-Concise handoff for the next agent session. Current as of 2026-10-19 (Task 19 —
-alpha.13 audit & hardening: full code audit of the Universal Software Management
-System, 8 issues filed (#13-#20) and ALL fixed with tests; v0.1.0-alpha.14).
+Concise handoff for the next agent session. Current as of 2026-10-19 (Task 22 —
+Projects screen fixes on main: nav tab rule, open-in-project plumbing, batched
+git probe; origin/main = 459505c).
+
+## COMPLETED TASK — issue #22: Projects screen fixes (on main)
+
+- USER-REPORTED BUG, root-caused: tapping the Projects tab could show the
+  TERMINAL screen — the bottom-nav saveState/restoreState pattern restored the
+  whole per-tab saved stack, and "Open terminal" had stacked `terminal` on top
+  of `projects`.
+- FIXES (all on main @ 459505c, branch fix/projects-screen):
+  1. Tabs ALWAYS land on their own root screen: shared openTab()
+     (popUpTo("home"), no saveState/restoreState) for bar/rail/Home jumps.
+     "files" stays a stacked drill-down; a tab tap wins over it.
+  2. "Open terminal" on a project now REALLY starts the shell in the project:
+     AppViewModel.requestTerminalInProject(name) -> pending dir
+     (/root/projects/<name>) -> TerminalScreen consumes once ->
+     PtyTerminal.newShellSession(workdir=...) (proot -w). Explicit request
+     spawns a NEW session even when sessions exist; plain tab visits reattach.
+  3. "Browse files" on a project opens Files IN /root/projects/<name>
+     (consume-once pending start dir); plain visits start at /root.
+  4. ProjectsManager: dead+buggy gitStatus() removed (ran git status WITHOUT
+     -C, zero callers); git probing batched to ONE proot spawn per refresh
+     (was 2 per project) with pure parseGitProbe() + 11 unit tests
+     (ProjectsGitProbeTest). Probe failure = "no git info" (honest).
+  5. Carried Path.of->Paths.get (API 34->26) lint fix onto main — pre-existing
+     latent NoSuchMethodError on Android 10-13 during rootfs install.
+- VERIFICATION: 130/130 unit tests PASS; lintRelease PASS; assembleRelease
+  PASS. Device drill pending: open-terminal-in-project lands in
+  /root/projects/<name>; Projects tab always the list; Browse files in project.
+- Note: audit/proprietary-distribution still holds the licensing-audit
+  deliverables (LICENSE, assets/licenses + in-app notices, audit report §13,
+  LicensesAssetsTest) pending merge into main.
 
 ## Repository & branch
 

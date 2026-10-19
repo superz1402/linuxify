@@ -557,3 +557,22 @@ Stage Summary:
 - All 8 audit issues (#13-#20) closed with verified fixes; suite grew 101 -> 119, 0 failures; release-blocking defect = the always-broken APT search.
 - alpha.13's published release is left untouched (traceability rule); the fixes ship as a NEW v0.1.0-alpha.14 release.
 - Still with the user (device drills): alpha.12 (e)-(h), alpha.13 (i)-(vi) plus alpha.14 additions — search actually returns results now, APT card shows upgrade feedback.
+
+---
+Task ID: 22
+Agent: Z (main agent, continuation session)
+Task: Fix the Projects screen (issue #22) — Projects tab landing on Terminal (nav bug), open-in-project plumbing dropped, dead/buggy gitStatus, 2N probe spawns. Plus: check how Services/Projects menus work (user questions, answered from code).
+
+Work Log:
+- User report: after using "Open terminal" on a project, tapping the Projects tab showed the TERMINAL screen with a session. Root cause: bottom-nav clicks used popUpTo(home){saveState=true}+restoreState=true; "Open terminal" pushed `terminal` on top of `projects`, and the next Projects tap RESTORED that whole saved stack (terminal back on top). This is the documented Navigation-Compose saveState/restoreState gotcha.
+- Fix (MainActivity): shared openTab() = navigate(route){popUpTo("home"){inclusive=false}; launchSingleTop=true} for bottom bar, nav rail, and Home quick-jumps. No saveState/restoreState — tabs ALWAYS show their own root screen. "files" stays a stacked drill-down (Back works); a tab tap still wins over it. Projects→Terminal is a tab switch now, not a stack push.
+- Fix (open-in-project): the project name was passed by ProjectsScreen but DROPPED by MainActivity; TerminalScreen.spawnSession() never passed workdir (PtyTerminal already supported it via proot -w). New: AppViewModel.requestTerminalInProject(name) sets a pending guest dir (/root/projects/<name>), TerminalScreen consumes it once on entry and spawns a NEW session in that dir even when sessions exist (explicit user action); plain tab visits keep the reattach behavior. requestFilesInProject(name) + FilesScreen consume-once start dir = "Browse files" opens IN the project (was hardcoded /root).
+- Fix (ProjectsManager): removed dead+buggy gitStatus() (zero callers; ran git status WITHOUT -C — would have reported on /root). Batched git probing: ONE proot spawn per refresh (was 2 per project) running a guest shell loop emitting name\tbranch|-\tdirty|- TSV; pure parseGitProbe() parser + 11 new unit tests (ProjectsGitProbeTest) covering repos, clean repos, non-repos, slashes in branches, detached HEAD, malformed/blank lines, CRLF, non-numeric counts, empty output. Probe failure degrades to "no git info" (same display as the old per-dir failure path). Script logic verified host-side (tab output, dirty counts, HEAD for uncommitted repos).
+- Also carried the API-34 Path.of→Paths.get lint fix onto main (pre-existing latent NoSuchMethodError on Android 10-13 in RootfsIntegrity/SafeTarExtractor; same change as 88813ad on audit/proprietary-distribution — cherry-picked so lintRelease passes on main).
+- Note: audit-branch-only files (LICENSE, assets/licenses, LicensesAssetsTest) were deliberately NOT carried — they live on audit/proprietary-distribution pending merge.
+- Verification: testDebugUnitTest 130/130 PASS (119 + 11 new); lintRelease PASS; assembleRelease PASS (com.linuxify.app 0.1.0-alpha.14); APK badging re-checked.
+- Git: branch fix/projects-screen pushed (verified 459505c), fast-forward merged into main, main pushed and verified (459505c = origin/main). Issue #22 auto-closes via "Fixes #22" in the merge commit; evidence comment posted.
+
+Stage Summary:
+- User-facing: Projects tab is ALWAYS the project list; "Open terminal" starts the shell INSIDE the project (proot -w); "Browse files" opens Files in the project; listing costs 1 proot spawn instead of 2N. Awaiting user device drill: (a) Projects → Open terminal → shell prompt is in /root/projects/<name>; (b) tap Projects tab → project list shows immediately, never the terminal; (c) Browse files → Files starts in the project dir; (d) services/menu behavior unchanged.
+- origin/main = 459505c9be62c8baea4576802e3b5b7cd5f79e6d. audit/proprietary-distribution still holds the licensing audit deliverables (b997868, 955879f, ad7a350, 88813ad) pending merge.
