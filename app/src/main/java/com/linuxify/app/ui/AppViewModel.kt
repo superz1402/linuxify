@@ -5,8 +5,10 @@ import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.linuxify.app.pkg.AptManager
+import com.linuxify.app.pkg.CatalogEntry
 import com.linuxify.app.pkg.EnvCore
 import com.linuxify.app.pkg.EnvManager
+import com.linuxify.app.pkg.SoftwareManager
 import com.linuxify.app.proj.ProjectsManager
 import com.linuxify.app.runtime.CrashReporter
 import com.linuxify.app.runtime.GuestPatches
@@ -34,6 +36,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val runtime = LinuxRuntime(app)
     val apt = AptManager(app)
     val env = EnvManager(app, apt)
+    val software = SoftwareManager(app, apt, env)
     val projects = ProjectsManager(app)
     val services = ServiceManager(app)
 
@@ -303,6 +306,68 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(bgGuard) {
             runCatching { apt.refreshIndex() }
                 .onFailure { CrashReporter.logNonFatal(getApplication(), "apt update", it) }
+        }
+    }
+
+    // ---- Universal Software Management ----
+
+    fun refreshCatalogState(entries: List<CatalogEntry>) {
+        viewModelScope.launch(bgGuard) {
+            runCatching { software.refreshInstalledState(entries) }
+                .onFailure { CrashReporter.logNonFatal(getApplication(), "refreshCatalogState", it) }
+        }
+    }
+
+    fun installCatalogEntry(entry: CatalogEntry) {
+        viewModelScope.launch(bgGuard) {
+            runCatching { software.install(entry) }
+                .onFailure { CrashReporter.logNonFatal(getApplication(), "installCatalogEntry", it) }
+            refreshHomeFacts()
+        }
+    }
+
+    fun removeCatalogEntry(entry: CatalogEntry) {
+        viewModelScope.launch(bgGuard) {
+            runCatching { software.remove(entry) }
+                .onFailure { CrashReporter.logNonFatal(getApplication(), "removeCatalogEntry", it) }
+            refreshHomeFacts()
+        }
+    }
+
+    /** One-tap index refresh + full APT upgrade, after a health check. */
+    fun upgradePackages() {
+        viewModelScope.launch(bgGuard) {
+            runCatching {
+                if (!env.ensureHealthyOnly()) return@runCatching
+                apt.refreshIndex()
+                apt.fullUpgrade()
+            }.onFailure { CrashReporter.logNonFatal(getApplication(), "upgradePackages", it) }
+            refreshHomeFacts()
+        }
+    }
+
+    fun addCustomTool(
+        name: String,
+        ecosystem: String,
+        pkg: String,
+        binary: String?,
+        description: String?,
+        onDone: (CatalogEntry?) -> Unit,
+    ) {
+        viewModelScope.launch(bgGuard) {
+            val res = runCatching { software.addCustomTool(name, ecosystem, pkg, binary, description) }
+                .getOrElse {
+                    CrashReporter.logNonFatal(getApplication(), "addCustomTool", it)
+                    null
+                }
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { onDone(res) }
+        }
+    }
+
+    fun removeCustomTool(id: String) {
+        viewModelScope.launch(bgGuard) {
+            runCatching { software.removeCustomTool(id) }
+                .onFailure { CrashReporter.logNonFatal(getApplication(), "removeCustomTool", it) }
         }
     }
 

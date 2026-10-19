@@ -25,7 +25,7 @@ class AptManager(private val ctx: Context) {
         val output: List<String> = emptyList(),
         val exitCode: Int? = null,
     ) {
-        enum class Kind { UPDATE, INSTALL, REMOVE, SEARCH, LIST_INSTALLED, REPAIR }
+        enum class Kind { UPDATE, INSTALL, REMOVE, SEARCH, LIST_INSTALLED, REPAIR, UPGRADE }
         enum class State { IDLE, RUNNING, DONE, FAILED }
     }
 
@@ -84,6 +84,13 @@ class AptManager(private val ctx: Context) {
      */
     suspend fun fixBroken(): Operation =
         run(Operation.Kind.REPAIR, "DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::ForceIPv4=true --fix-broken install -y")
+
+    /**
+     * One-tap upgrade of installed packages (IPv4 fallback, noninteractive).
+     * Pair with refreshIndex() first — the callers do.
+     */
+    suspend fun fullUpgrade(): Operation =
+        run(Operation.Kind.UPGRADE, "DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::ForceIPv4=true upgrade -y")
 
     suspend fun remove(vararg packages: String): Operation =
         run(Operation.Kind.REMOVE, "DEBIAN_FRONTEND=noninteractive apt-get remove -y ${packages.joinToString(" ")}")

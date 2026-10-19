@@ -25,7 +25,7 @@ no meaning on the app's architecture.
 | `report` | bug-report fingerprint | Global crash reporter (in-app copyable report, dedicated crash screen) + one-tap "share whole terminal log" floating button — the report can be pasted to any AI/app in two taps. | **COVERED** |
 | `discover` | scan for existing environments | No existing proot environments to discover inside the app sandbox; the app manages exactly its own. | **N/A** (single-sandbox architecture) |
 | `adopt ubuntu` | adopt existing Ubuntu without reinstall | Same reasoning as `discover`; the app ships and owns its own pinned rootfs. | **N/A** |
-| `add <package>` | install a curated tool from registry (12: Cline, Codex, Aider, Goose, Gemini CLI, Wrangler, Docker CLI, kubectl, Terraform, PM2, Playwright, Git) | Packages screen installs ANY Debian/Ubuntu package via real APT; the CLI's curated tools are themselves installable in the terminal (`apt install git`, `npm i -g @openai/codex`, etc.). What is missing is the curated one-tap registry UX. | **PARTIAL** (real apt covers the substance; curated registry UX not yet built) |
+| `add <package>` | install a curated tool from registry (12: Cline, Codex, Aider, Goose, Gemini CLI, Wrangler, Docker CLI, kubectl, Terraform, PM2, Playwright, Git) | **Software catalog** (alpha.13): searchable curated entries across APT/npm/pip/static-binary ecosystems with automatic prerequisites, verification and uninstall — plus user-defined custom tools with the same core. The CLI's curated tools are all installable through the unrestricted APT/terminal path too. | **COVERED** (general-purpose: catalog + adapters, not one preset per app) |
 | `search <query>` | search registry | Packages screen: `apt-cache search` with exact-name matching. | **COVERED** (apt registry instead of CLI registry) |
 | `list` | list installed packages | Home shows installed package count; `dpkg -l`-style listing via terminal; package states from real APT operations. | **PARTIAL** (no dedicated visual "installed list" screen — count + terminal) |
 | `--help` | command help | Every screen has explanatory copy; docs/ set in-repo. | **COVERED** (GUI idiom) |
@@ -39,7 +39,7 @@ no meaning on the app's architecture.
 | `env` | GUEST_ENV_PRELUDE + profile.d (PS1, TMPDIR, LANG, resolv.conf 8.8.8.8/1.1.1.1) written by the installer. | **COVERED** |
 | `shell` | Terminal screen — Termux-true PTY UI: tap keyboard, pinch zoom, extra keys, long-press copy/paste, multi-session tabs, share-log button. | **COVERED** (arguably exceeds CLI) |
 | `run` | Services screen: user-defined managed commands run inside the userland, honest STARTING/RUNNING/FAILED states, port-reachability proof. | **COVERED** |
-| `update` / `upgrade` | Packages screen: `apt-get update -y`; ALL apt network operations carry `-o Acquire::ForceIPv4=true` (flaky-network fallback); upgrade via APT in terminal. | **PARTIAL** (no one-tap `apt upgrade` button yet) |
+| `update` / `upgrade` | Software screen: one-tap **Update & upgrade** (package-health check → `apt-get update` → `apt-get upgrade`, noninteractive, IPv4 fallback); ALL apt network ops carry `-o Acquire::ForceIPv4=true`. | **COVERED** (alpha.13) |
 | `remove` | Packages screen: `apt-get remove -y`. | **COVERED** |
 | `info` | Home screen facts card (distro, version, ABI, rootfs size, free bytes, device). | **COVERED** |
 | `config` | Settings screen (theme mode etc.). | **PARTIAL** (app exposes fewer knobs than CLI config file) |
@@ -62,14 +62,12 @@ no meaning on the app's architecture.
 - Flaky-network auto-recovery: HTTP Range resume + exponential backoff + jitter +
   checksum-verified retry on the rootfs download; IPv4 fallback on every apt network
   operation.
-- Dependency & Package Recovery Manager (alpha.12): one-shot environment audit
-  (distro, arch, free storage, DNS reachability, dpkg interrupted-ops, broken deps,
-  tool presence); package-manager repair ONLY on real evidence (`dpkg --configure -a`
-  / `apt-get --fix-broken install` — never blindly); BASE environment (curl +
-  ca-certificates) installed automatically after a fresh environment install;
-  optional DEVELOPER profile (git, Node.js, npm); install-retry after dependency
-  repair; per-tool verification that each executable exists AND runs; failure
-  reporting with the failed step plus a practical recovery command.
+- Universal Software Management (alpha.13): searchable catalog (System/Dev/AI/Network/
+  Media/Data/Text) over shared ecosystem adapters — APT, npm, pip, checksum-pinned
+  static binaries (yq/jq pinned to upstream sha256, cross-verified against upstream
+  manifests); auto prerequisites (Node.js profile for npm tools, python3-pip for pip);
+  per-tool run verification; uninstall; user-defined custom tools (apt/npm/pip) via
+  the same core; one-tap Update & upgrade; terminal remains unrestricted.
 - Honest state reporting (build-verified vs device-verified), global crash reporting.
 
 ## Verdict
@@ -77,11 +75,12 @@ no meaning on the app's architecture.
 Everything the CLI uses day-to-day on a phone (launch, install, shell, add/search/
 list packages, run servers, doctor/repair/fix, report) is covered by the app —
 most of it in a more integrated way. Remaining honest gaps, in priority order:
-1. Curated tool registry UX (`add` with 12 presets) — PARTIAL (alpha.12's BASE/
-   DEVELOPER profiles cover the most common presets incl. the Node.js/OpenCode
-   toolchain; the full 12-preset registry remains open)
-2. One-tap `apt upgrade` — PARTIAL
-3. Visual installed-packages list — PARTIAL
-4. Snapshot/gc — DEFERRED
-5. In-app self-update — DEFERRED
+1. Visual installed-packages list — PARTIAL (catalog shows per-tool state; a full
+   `dpkg -l` screen is still open)
+2. Snapshot/gc — DEFERRED
+3. In-app self-update — DEFERRED
+4. Custom APT repositories (sources.list management) — DEFERRED (custom TOOLS ship;
+   custom third-party repo definitions are a later hardening step)
+5. Rust/Cargo ecosystem adapter — DEFERRED until its use cases justify it
+   (the terminal covers cargo today)
 6. Multi-distro (`use`) — DEFERRED

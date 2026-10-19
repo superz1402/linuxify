@@ -45,7 +45,7 @@ import androidx.navigation.compose.rememberNavController
 import com.linuxify.app.ui.AppViewModel
 import com.linuxify.app.ui.screens.FilesScreen
 import com.linuxify.app.ui.screens.HomeScreen
-import com.linuxify.app.ui.screens.PackagesScreen
+import com.linuxify.app.ui.screens.SoftwareScreen
 import com.linuxify.app.ui.screens.ProjectsScreen
 import com.linuxify.app.ui.screens.ServicesScreen
 import com.linuxify.app.ui.screens.SettingsScreen
@@ -190,7 +190,7 @@ private fun LinuxifyNavHost(navController: NavHostController, vm: AppViewModel) 
             )
         }
         composable("files") { FilesScreen(vm) }
-        composable("packages") { PackagesScreen(vm) }
+        composable("packages") { SoftwareScreen(vm) }
         composable("services") { ServicesScreen(vm) }
         composable("settings") { SettingsScreen(vm) }
     }

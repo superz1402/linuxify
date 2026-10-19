@@ -128,7 +128,7 @@ fun HomeScreen(
         }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
             OutlinedButton(onClick = onOpenPackages, modifier = Modifier.weight(1f)) {
-                Text("Packages")
+                Text("Software")
             }
             OutlinedButton(onClick = onOpenServices, modifier = Modifier.weight(1f)) {
                 Text("Services")

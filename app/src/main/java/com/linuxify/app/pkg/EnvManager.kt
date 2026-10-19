@@ -121,6 +121,16 @@ class EnvManager(
     }
 
     /**
+     * Reusable one-shot audit WITHOUT touching the Environment card state —
+     * other managers (SoftwareManager) probe the same way without fighting
+     * over this card's UI. Returns null when the rootfs is not ready.
+     */
+    suspend fun rawAudit(): EnvCore.EnvAudit? {
+        if (!runtime.rootfsReady()) return null
+        return withContext(Dispatchers.IO) { runProbe() }
+    }
+
+    /**
      * Health-only pass used BEFORE any other install path (search-screen
      * installs): repairs the package manager when actually inconsistent.
      * @return true when healthy (or repaired), false with failureHint set.

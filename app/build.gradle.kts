@@ -41,8 +41,8 @@ android {
         // approach Termux, UserLAnd and every proot-based Android app uses.
         // compileSdk stays 35 so we keep modern toolchain/API availability.
         targetSdk = 28
-        versionCode = 12
-        versionName = "0.1.0-alpha.12"
+        versionCode = 13
+        versionName = "0.1.0-alpha.13"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -121,4 +121,6 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    // Real org.json for JVM unit tests (the android.jar stub throws "not mocked")
+    testImplementation("org.json:json:20240303")
 }

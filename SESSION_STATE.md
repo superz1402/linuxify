@@ -1,23 +1,29 @@
 # SESSION_STATE.md — Linuxify Android
 
-Concise handoff for the next agent session. Current as of 2026-10-19 (Task 17 —
-Dependency & Package Recovery Manager: environment audit, repair-only-when-
-inconsistent, BASE/DEVELOPER tool profiles, per-tool install verification,
-IPv4 fallback on all apt ops; v0.1.0-alpha.12).
+Concise handoff for the next agent session. Current as of 2026-10-19 (Task 18 —
+Universal Software Management System: searchable catalog over APT/npm/pip/static-
+binary adapters, custom tools, one-tap upgrade; v0.1.0-alpha.13).
 
 ## Repository & branch
 
 - Canonical repo: https://github.com/superz1402/linuxify — branch `main`
 - Latest verified remote commit: see `git ls-remote origin main`
 - Releases:
-  - v0.1.0-alpha.12 (current) — Dependency & Package Recovery Manager (see the
-    section below): one-shot environment audit, repair ONLY on real dpkg/apt
+  - v0.1.0-alpha.13 (current) — Universal Software Management System (see the
+    section below): Software catalog (24 curated entries: System/Dev/AI/Network/
+    Media/Data/Text) over ecosystem adapters (APT, npm, pip, checksum-pinned static
+    binaries — yq 4.44.3 + jq 1.7.1 arm64, sha256 cross-verified against upstream
+    manifests); auto prerequisites (Node.js profile, python3-pip); per-tool run
+    verification; uninstall; user-defined custom tools (apt/npm/pip, JSON-persisted);
+    one-tap Update & upgrade; Packages screen renamed/rebuilt as the Software hub.
+    101 unit tests. Assets: linuxify-0.1.0-alpha.13-release.apk
+  - v0.1.0-alpha.12 — Dependency & Package Recovery Manager: one-shot environment audit, repair ONLY on real dpkg/apt
     inconsistency (never blindly), BASE env (curl + ca-certificates) auto-
     installed after a fresh environment install, optional DEVELOPER profile
     (git, Node.js, npm), install-retry after fix-broken, per-tool verification
     (binary exists AND runs), failure reporting with practical recovery
     commands, IPv4 fallback on every apt network operation. EnvCore pure core
-    unit-tested (13 new tests, 74 total). Assets: linuxify-0.1.0-alpha.12-release.apk
+    unit-tested. Assets: linuxify-0.1.0-alpha.12-release.apk
   - v0.1.0-alpha.11 — ROOT-CAUSE fix for the "groups: cannot find
     name for group ID" prompt warnings (two independent layers, host-verified
     against the real ubuntu-base tarball — see the section below); in-shell
@@ -116,6 +122,43 @@ IPv4 fallback on all apt ops; v0.1.0-alpha.12).
   missing-tool lists, verification chips (✓/✗ + version line), per-step results
   + live log box.
 
+## Universal Software Management System (alpha.13 — pkg/Ecosystems.kt, Catalog.kt, CustomTools.kt, SoftwareManager.kt)
+
+- User directive: Linuxify is a GENERAL-PURPOSE Linux environment, not an app
+  installer. Architecture: shared CORE (health/recovery/install/verify/remove) +
+  ECOSYSTEM ADAPTERS (APT, npm, pip, static binaries) + CATALOG as pure data +
+  UNRESTRICTED terminal. OpenCode is one catalog entry among many.
+- `InstallSpec` (sealed): Apt(packages) / Npm(pkg, binary) / Pip(pkg, binary) /
+  Binary(url, sha256, binaryName, version, archs). `Ecosystems.resolveSpec`
+  picks the first spec usable NOW; else the first with auto-provisionable
+  prerequisites; else null (honest unsupported-arch failure).
+- Prereq chains: npm tools auto-install the Node.js toolchain via the DEVELOPER
+  profile; pip tools auto-install python3-pip; pip uses --break-system-packages
+  (Ubuntu 24.04 PEP 668 — the standard container-like-userland choice).
+- Binary adapter: raw single-file downloads ONLY (archives rejected in v1 so
+  extraction bugs cannot happen), sha256-pinned, 3 attempts + backoff, 128 MB
+  cap, installed host-side into <rootfs>/usr/local/bin with exec bit.
+- Catalog entries verify via `binary --version` inside the guest; every entry
+  has ≥1 spec, a verify binary, and a known category (unit-enforced).
+- CustomTools: user entries (apt/npm/pip) validated (slug ids, safe package
+  regexes — no `; | &` etc.), JSON-persisted at filesDir/custom_tools.json,
+  merged after builtins (never shadow a builtin id), corrupt JSON → empty list.
+- SoftwareManager: one op at a time (own Mutex; apt writes serialize through
+  the SHARED AptManager). Op flow: PREPARING (audit+prereqs) → INSTALLING →
+  VERIFYING → DONE/FAILED with recovery hints. remove() maps to the same
+  adapter. refreshInstalledState = ONE proot spawn probing all visible binaries.
+- UI: PackagesScreen REPLACED by SoftwareScreen (route stays "packages"): the
+  alpha.12 Environment card (+ new Update & upgrade button), software op card
+  with live log, catalog card (search + category chips + per-entry Install/
+  Remove + custom-entry delete), Add-custom-tool dialog, and the unrestricted
+  full-APT search below. Home button label: Software.
+- ENV ROLLBACK hit AGAIN mid-session (Task 18): HEAD reverted to alpha.5, JDK
+  + SDK + download/ APKs wiped — but origin/main held alpha.12 and the
+  untracked new files survived. Recovered: git reset --hard origin/main,
+  Temurin JDK 21.0.12.1+1 + SDK reinstalled, alpha.12 APK re-downloaded from
+  the release. LESSON (recurring): commit+push EARLY and OFTEN, not just at
+  session end.
+
 ## THE loader rule (learned in alpha.4 — do not regress)
 
 - Termux proot is built with PROOT_UNBUNDLE_LOADER: every guest execve is
@@ -194,13 +237,18 @@ IPv4 fallback on all apt ops; v0.1.0-alpha.12).
   terminal `node -v` works; (g) search-screen install of any package when the
   package DB is healthy → no repair detour; (h) after a FRESH environment
   install, curl exists without manual action.
+- Awaiting user drill for alpha.13: (i) Software > catalog → Install htop →
+  APT path, verified chip, "installed" state; (ii) Install OpenCode (AI
+  category) → Node.js toolchain auto-installs first, then npm, then
+  `opencode --version` verified; (iii) Install yq → static-binary path,
+  sha256-verified, `yq --version` works; (iv) Update & upgrade one-tap;
+  (v) Add custom tool (e.g. pip yt-dlp) → installs + verifies; (vi) terminal
+  still unrestricted — `apt install sl` style manual installs unaffected.
 
 ## Next exact actions
 
-1. User tests alpha.12 on device: the alpha.11 drills (a)–(d) if not yet done,
-   plus the alpha.12 drills (e)–(h) above. OpenCode path: Packages → Developer
-   tools → Install; then in terminal `npm i -g opencode-ai` (or the official
-   installer) — Node.js/npm are the only prerequisites it needs.
-2. Candidate next features: full curated tool registry (12 presets incl.
-   OpenCode one-tap), one-tap `apt upgrade`, installed-packages screen, session
-   close button ("×" on ended tabs).
+1. User tests alpha.13 on device: drills (e)–(h) from alpha.12 if not yet
+   done, plus (i)–(vi) above.
+2. Candidate next features: full `dpkg -l` installed-packages screen, custom
+   APT repositories, Rust/Cargo adapter, session close button ("×" on ended
+   tabs), in-app self-update.

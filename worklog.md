@@ -514,3 +514,22 @@ Work Log:
 Stage Summary:
 - Shipped: the Dependency & Package Recovery Manager exactly per the user's table — automatic deps where they belong, recovery only on evidence, IPv4 fallback, verification, honest failure reporting.
 - Honest split: all logic build-verified + unit-tested on server; the on-device drills (Check environment card, Developer tools install with verification chips, auto-curl after fresh install) are with the user.
+
+---
+Task ID: 18
+Agent: Z (main agent, continuation session)
+Task: User directive — Universal Software Management System, NOT an OpenCode installer: general-purpose core + ecosystem adapters (APT/npm/pip/static binaries) + catalog as data + unrestricted terminal. OpenCode = one catalog entry among many.
+
+Work Log:
+- ENVIRONMENT EVENT (3rd time, MID-SESSION this time): HEAD rolled back to alpha.5 mid-turn; JDK/SDK wiped; download/ reduced to alpha.2/alpha.5. origin/main held alpha.12; the turn's untracked new files survived. Recovered: git fetch + reset --hard origin/main; Temurin JDK 21.0.12.1+1 + Android SDK (cmdline-tools, platform-35, build-tools 35.0.0) reinstalled; alpha.12 APK re-downloaded from the GitHub release. LESSON recorded: commit+push EARLY, not just at session end.
+- NEW ARCHITECTURE: pkg/Ecosystems.kt (InstallSpec sealed: Apt/Npm/Pip/Binary; resolveSpec = first usable now, else first auto-provisionable, else honest null; command builders; installed-state probe parser). pkg/Catalog.kt (24 curated entries, categories System/Dev/AI/Network/Media/Data/Text, every entry unit-enforced to have specs+verify+category). pkg/CustomTools.kt (validated user entries, slug ids, safe package regexes, JSON persistence, merge never shadows builtins, corrupt JSON -> empty).
+- pkg/SoftwareManager.kt: single-lock orchestrator sharing the AppViewModel AptManager mutex. Install flow: audit (via new EnvManager.rawAudit) -> resolve spec -> prereqs (Node.js profile for npm tools; python3-pip for pip, with --break-system-packages per PEP 668) -> adapter install -> verify (binary --version in guest) -> DONE/FAILED with recovery hints. Binary adapter: raw files only (archives rejected in v1), sha256-pinned, 3 attempts + backoff, 128 MB cap, host-side install into <rootfs>/usr/local/bin. BinaryDownloader with real sha256 verification.
+- CHECKSUM PINNING: yq 4.44.3 + jq 1.7.1 arm64 downloaded over TLS and cross-verified against upstream checksum manifests (yq checksums file, jq sha256sum.txt) before being pinned in Catalog.kt.
+- One-tap Update & upgrade: AptManager Kind.UPGRADE + fullUpgrade() (noninteractive, IPv4 fallback), AppViewModel.upgradePackages() = health check -> update -> upgrade.
+- UI: PackagesScreen REPLACED by SoftwareScreen (route "packages" unchanged, Home button relabeled "Software"): Environment card + Update & upgrade, software op card with live log, catalog (search + category chips + Install/Remove per entry + custom delete), Add-custom-tool dialog (apt/npm/pip chips), unrestricted full-APT search section below.
+- 27 new unit tests (101 total, 0 failures) — includes catalog data-integrity rules and custom-tool safety validation. testImplementation org.json:json:20240303 added for JVM JSON tests (android.jar stub throws not-mocked).
+- Compose/Kotlin fixes: boundedExec trailing lambda must be named onOutput (last param is shell); continue not allowed inside repeat{} lambda (use for-loop); Column takes verticalArrangement, not horizontalArrangement.
+- assembleRelease clean after one transient mid-build failure (re-run resumed); versionCode 13; aapt confirms versionName 0.1.0-alpha.13; cert 8f55e466…cca9 verified; APK in download/.
+
+Stage Summary:
+- Shipped: the Universal Software Management System — shared core, four ecosystem adapters, searchable catalog, custom tools, one-tap upgrade, unrestricted terminal. Build+unit verified on server; the six on-device drills (catalog install, npm auto-prereq via OpenCode, sha256 binary path, upgrade, custom tool, manual terminal installs) are with the user.
