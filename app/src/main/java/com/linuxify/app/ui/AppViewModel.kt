@@ -377,25 +377,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun removePackages(vararg names: String, onDone: (AptManager.Operation) -> Unit) {
-        viewModelScope.launch(bgGuard) {
-            PowerPolicy.opBegin(ctx)
-            try {
-                val op = runCatching { apt.remove(*names) }.getOrElse {
-                    CrashReporter.logNonFatal(getApplication(), "apt remove", it)
-                    AptManager.Operation(
-                        AptManager.Operation.Kind.REMOVE,
-                        AptManager.Operation.State.FAILED,
-                        listOf(it.message ?: it.javaClass.simpleName),
-                    )
-                }
-                onDone(op)
-                refreshHomeFacts()
-            } finally {
-                PowerPolicy.opEnd(ctx)
-            }
-        }
-    }
 
     fun searchPackages(query: String, onResult: (List<AptManager.SearchHit>) -> Unit) {
         viewModelScope.launch(bgGuard) {
@@ -406,17 +387,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun refreshPackageIndex() {
-        viewModelScope.launch(bgGuard) {
-            PowerPolicy.opBegin(ctx)
-            try {
-                runCatching { apt.refreshIndex() }
-                    .onFailure { CrashReporter.logNonFatal(getApplication(), "apt update", it) }
-            } finally {
-                PowerPolicy.opEnd(ctx)
-            }
-        }
-    }
 
     // ---- Universal Software Management ----
 
@@ -564,6 +534,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // -- system caches (Settings screen) --
+    /** Delete all finished-session terminal history (logs + index records). */
+    fun clearTerminalHistory(onDone: (String) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO + bgGuard) {
+            val deleted = runCatching { TerminalPersistence.clearHistory(getApplication()) }
+                .onFailure { CrashReporter.logNonFatal(getApplication(), "clearTerminalHistory", it) }
+                .getOrDefault(-1)
+            refreshHomeFacts()
+            withContext(kotlinx.coroutines.Dispatchers.Main) {
+                onDone(
+                    if (deleted >= 0) "Deleted $deleted terminal history record(s)"
+                    else "Could not clear terminal history — see crash report",
+                )
+            }
+        }
+    }
+
 
     fun systemCacheReport(onDone: (MaintenanceManager.Report?) -> Unit) {
         viewModelScope.launch(Dispatchers.IO + bgGuard) {

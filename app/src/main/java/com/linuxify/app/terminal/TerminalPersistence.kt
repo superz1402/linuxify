@@ -148,12 +148,6 @@ object TerminalPersistence {
         records.values.filter { it.id !in live }.sortedBy { it.startedMs }
     }
 
-    /** Record for a live session (for labels), or null. */
-    fun recordOf(session: TerminalSession): Record? {
-        val id = liveIds[session] ?: return null
-        return synchronized(records) { records[id] }
-    }
-
     /**
      * Load the index from disk. Called ONCE per process, before any session
      * is registered (AppViewModel init). Records for sessions that were alive
@@ -193,22 +187,6 @@ object TerminalPersistence {
         doomed.forEach { logFile(ctx, it).delete() }
         if (doomed.isNotEmpty()) writeIndex(ctx)
         return doomed.size
-    }
-
-    /**
-     * Replace the whole on-disk index + log set from a backup restore. Live
-     * sessions are preserved in the new index; on-disk logs not in [records]
-     * are deleted. Callers pass the restored records.
-     */
-    fun replaceFromRestore(ctx: Context, restored: List<Record>) {
-        val live = synchronized(records) {
-            records.values.filter { it.id in liveIds.values.toHashSet() }
-        }
-        synchronized(records) {
-            records.clear()
-            (restored + live).forEach { records[it.id] = it }
-        }
-        writeIndex(ctx)
     }
 
     // ---- internals ----------------------------------------------------------

@@ -250,13 +250,6 @@ class LinuxRuntime(private val ctx: Context) {
         return dir.listFiles()?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() })) ?: emptyList()
     }
 
-    fun relativePathOf(file: File): String? {
-        val rootfs = RuntimeDirs.rootfsDir(ctx).canonicalFile
-        val c = file.canonicalFile
-        if (!c.path.startsWith(rootfs.path)) return null
-        return c.path.removePrefix(rootfs.path).ifEmpty { "/" }
-    }
-
     companion object {
         private const val MAX_PREFLIGHT_ATTEMPTS = 3
 

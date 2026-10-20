@@ -108,18 +108,6 @@ class AptManager(private val ctx: Context) {
             }
     }
 
-    /**
-     * True when dpkg reports "Status: install ok installed" for [pkg]. Executed
-     * as an explicit argv (no shell) so a hostile package name cannot inject
-     * commands — the old Regex.escape-built shell string was neither shell- nor
-     * ERE-safe and always returned false (issue #13).
-     */
-    suspend fun isInstalled(pkg: String): Boolean = withContext(Dispatchers.IO) {
-        val runtime = LinuxRuntime(ctx)
-        val res = runtime.execInRootfs(listOf("dpkg", "-s", pkg), timeoutMs = 30_000)
-        res.exitCode == 0 && AptCommands.hasInstalledStatus(res.stdout)
-    }
-
     suspend fun installedCount(): Int? = withContext(Dispatchers.IO) {
         val runtime = LinuxRuntime(ctx)
         val res = runtime.boundedExec("dpkg -l 2>/dev/null | grep -c '^ii'", timeoutMs = 60_000)
@@ -164,8 +152,4 @@ object AptCommands {
         val quoted = ereQuote(safe)
         return "apt-cache search --names-only '^" + quoted + "|" + quoted + "' 2>/dev/null | head -40"
     }
-
-    /** dpkg -s output says the package is fully installed. */
-    fun hasInstalledStatus(dpkgStatusStdout: String): Boolean =
-        dpkgStatusStdout.lineSequence().any { it.trim() == "Status: install ok installed" }
 }

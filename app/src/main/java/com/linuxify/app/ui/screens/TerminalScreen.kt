@@ -27,9 +27,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.width
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -46,6 +48,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -97,6 +100,12 @@ import kotlin.math.roundToInt
  *    the live tabs as dimmed, read-only tabs with their start time — nothing
  *    is wiped until the user deletes it. Each history tab offers "New shell
  *    in this directory" and a delete action.
+ *  - Close & clear: every live tab carries a ✕ (and the tab row a CLR key).
+ *    Closing a RUNNING shell asks first — everything inside it dies with it —
+ *    then SIGKILLs it and finalizes its on-disk record (the transcript stays
+ *    in history; only the tab goes). CLR clears screen + scrollback of the
+ *    focused session by feeding ESC[H ESC[2J ESC[3J straight into the
+ *    emulator — never the child's stdin, so it is safe while TUI apps run.
  */
 @Composable
 fun TerminalScreen(vm: AppViewModel) {
@@ -155,6 +164,44 @@ fun TerminalScreen(vm: AppViewModel) {
     // THIS process stay in the live list ("(ended)" tabs) until the process
     // exits; their transcripts are already on disk either way.
     var history by remember { mutableStateOf(TerminalPersistence.history()) }
+
+    // Session close/clear (user request): hold the SESSION, not an index —
+    // indices shift as tabs open/close; the session object does not.
+    var confirmClose by remember { mutableStateOf<TerminalSession?>(null) }
+
+    /** The focused session when a LIVE tab is selected (history has no PTY). */
+    fun focusedLiveSession(): TerminalSession? =
+        if (selected < sessions.size) sessions.getOrNull(selected) else null
+
+    fun closeNow(s: TerminalSession) {
+        s.finishIfRunning()
+        // Registry.remove finalizes the on-disk record (transcript survives in
+        // history), drops the tab and releases the foreground keep-alive when
+        // nothing else is live.
+        TerminalSessionRegistry.remove(s)
+        selected = when {
+            sessions.isEmpty() -> 0
+            // history tabs live AFTER the live region: losing one live tab
+            // shifts the whole region left by one
+            selected >= sessions.size -> (selected - 1).coerceAtLeast(0)
+            else -> selected.coerceIn(0, sessions.size - 1)
+        }
+    }
+
+    /** Running shells hold live processes — confirm first; ended tabs close silently. */
+    fun requestClose(s: TerminalSession?) {
+        if (s == null) return
+        if (s.isRunning) confirmClose = s else closeNow(s)
+    }
+
+    /** Clear screen + scrollback of the focused session via the emulator itself. */
+    fun clearFocused() {
+        val emulator = focusedLiveSession()?.emulator ?: return
+        emulator.append(CLEAR_SEQUENCE, CLEAR_SEQUENCE.size)
+        // Redraws are callback-driven on this screen (not recomposition-driven),
+        // so poke the bound view directly.
+        sessionClient.boundView?.onScreenUpdated()
+    }
 
     LaunchedEffect(Unit) {
         // A pending "open terminal in project" request spawns a NEW session in
@@ -220,9 +267,35 @@ fun TerminalScreen(vm: AppViewModel) {
                     selected = selected,
                     onSelect = { selected = it },
                     onNewSession = { spawnSession() },
+                    onCloseTab = ::requestClose,
+                    onClear = ::clearFocused,
+                    clearEnabled = focusedLiveSession() != null,
                     // reads refreshTick so "(ended)" labels update without polling
                     refreshTick = refreshTick,
                 )
+
+                confirmClose?.let { target ->
+                    AlertDialog(
+                        onDismissRequest = { confirmClose = null },
+                        title = { Text("Close this shell?") },
+                        text = {
+                            Text(
+                                "The shell and everything running inside it will be terminated. " +
+                                    "Background jobs started from this session will not survive. " +
+                                    "Its transcript stays in terminal history.",
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                closeNow(target)
+                                confirmClose = null
+                            }) { Text("Close") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { confirmClose = null }) { Text("Cancel") }
+                        },
+                    )
+                }
 
                 val combinedCount = sessions.size + history.size
                 when {
@@ -343,6 +416,13 @@ private const val TERMUX_DEFAULT_FONT_SIZE_PX = 30
 private const val MIN_FONT_SIZE_PX = 8
 private const val MAX_FONT_SIZE_PX = 64
 
+/** ESC[H (cursor home) + ESC[2J (erase display) + ESC[3J (drop scrollback). */
+private val CLEAR_SEQUENCE = byteArrayOf(
+    0x1b, '['.code.toByte(), 'H'.code.toByte(),
+    0x1b, '['.code.toByte(), '2'.code.toByte(), 'J'.code.toByte(),
+    0x1b, '['.code.toByte(), '3'.code.toByte(), 'J'.code.toByte(),
+)
+
 private val TermuxTerminalBackground = Color(0xFF000000)
 private val TermuxForeground = Color(0xFFE0E0E0)
 
@@ -406,6 +486,9 @@ private fun SessionTabs(
     selected: Int,
     onSelect: (Int) -> Unit,
     onNewSession: () -> Unit,
+    onCloseTab: (TerminalSession) -> Unit,
+    onClear: () -> Unit,
+    clearEnabled: Boolean,
     refreshTick: Int,
 ) {
     Row(
@@ -421,12 +504,32 @@ private fun SessionTabs(
             val tick = refreshTick // read to subscribe: session-finish updates labels
             val label = "sh ${i + 1}" + if (!s.isRunning && tick >= 0) " (ended)" else ""
             TextButton(onClick = { onSelect(i) }, modifier = Modifier.height(30.dp)) {
-                Text(
-                    label,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = if (i == selected) TermuxForeground else TermuxForeground.copy(alpha = 0.45f),
-                )
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = if (i == selected) TermuxForeground else TermuxForeground.copy(alpha = 0.45f),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    // Compact close affordance inside the tab; the whole tab
+                    // remains the primary (switch) touch target. The inner
+                    // clickable consumes the tap, so it never double-fires
+                    // the tab's own onSelect.
+                    Box(
+                        Modifier
+                            .clip(CircleShape)
+                            .clickable { onCloseTab(s) }
+                            .padding(5.dp),
+                    ) {
+                        Text(
+                            "\u2715",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = TermuxForeground.copy(alpha = 0.55f),
+                        )
+                    }
+                }
             }
         }
         // History tabs (issue #23): dimmed, labeled with the session start
@@ -445,6 +548,18 @@ private fun SessionTabs(
             }
         }
         Spacer(Modifier.weight(1f))
+        TextButton(
+            onClick = onClear,
+            enabled = clearEnabled,
+            modifier = Modifier.height(30.dp),
+        ) {
+            Text(
+                "CLR",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = if (clearEnabled) TermuxKeyForeground else TermuxForeground.copy(alpha = 0.25f),
+            )
+        }
         TextButton(onClick = onNewSession, modifier = Modifier.height(30.dp)) {
             Text("+", style = MaterialTheme.typography.titleMedium, color = TermuxForeground)
         }

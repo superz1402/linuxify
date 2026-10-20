@@ -14,10 +14,8 @@ object RuntimeMetadata {
 
     const val DISTRO_NAME = "Ubuntu"
     const val DISTRO_VERSION = "24.04.5 LTS (noble)"
-    const val DISTRO_ID = "ubuntu"
 
     const val BASE_URL = "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/"
-    const val ROOTFS_VERSION_TAG = "24.04.5"
 
     /** Approximate compressed download size, shown before download starts. */
     const val ROOTFS_APPROX_DOWNLOAD_BYTES: Long = 35L * 1024 * 1024

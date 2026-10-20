@@ -56,6 +56,7 @@ fun SettingsScreen(vm: AppViewModel) {
     var message by remember { mutableStateOf<String?>(null) }
     var confirmReset by remember { mutableStateOf(false) }
     var resetTyped by remember { mutableStateOf("") }
+    var confirmClearTermHist by remember { mutableStateOf(false) }
 
     // cache report/confirm flow (system-wide)
     var cacheReport by remember { mutableStateOf<MaintenanceManager.Report?>(null) }
@@ -119,6 +120,11 @@ fun SettingsScreen(vm: AppViewModel) {
                     onClick = { vm.systemCacheReport { cacheReport = it } },
                     modifier = Modifier.padding(top = 8.dp),
                 ) { Text("Clear caches (whole system)…") }
+                // Terminal history is transcript logs of finished sessions —
+                // live sessions and their records are never touched.
+                OutlinedButton(onClick = { confirmClearTermHist = true }) {
+                    Text("Clear terminal history…")
+                }
             }
         }
 
@@ -217,7 +223,7 @@ fun SettingsScreen(vm: AppViewModel) {
         }
 
         Text(
-            "Linuxify 0.1.0-alpha.1 · GPLv3 · terminal components Apache-2.0 (jackpal/Termux) · proot GPLv3",
+            "Linuxify ${com.linuxify.app.BuildConfig.VERSION_NAME} · GPLv3 · terminal components Apache-2.0 (jackpal/Termux) · proot GPLv3",
             style = AppType.MonoSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -269,6 +275,30 @@ fun SettingsScreen(vm: AppViewModel) {
                 ) { Text("Clear") }
             },
             dismissButton = { TextButton(onClick = { cacheReport = null }) { Text("Cancel") } },
+        )
+    }
+
+    // ---- clear terminal history confirm dialog ----
+    if (confirmClearTermHist) {
+        AlertDialog(
+            onDismissRequest = { confirmClearTermHist = false },
+            title = { Text("Clear terminal history?") },
+            text = {
+                Text(
+                    "Deletes the transcripts and records of all FINISHED terminal sessions " +
+                        "(the \"Terminal history\" storage shown above). Shells that are " +
+                        "running right now keep running and are not affected.",
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        confirmClearTermHist = false
+                        vm.clearTerminalHistory { message = it }
+                    },
+                ) { Text("Clear") }
+            },
+            dismissButton = { TextButton(onClick = { confirmClearTermHist = false }) { Text("Cancel") } },
         )
     }
 

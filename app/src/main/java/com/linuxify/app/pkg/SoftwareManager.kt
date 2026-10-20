@@ -36,7 +36,6 @@ class SoftwareManager(
     enum class Phase { IDLE, PREPARING, INSTALLING, VERIFYING, DONE, FAILED }
 
     data class SoftwareOp(
-        val entryId: String? = null,
         val name: String? = null,
         val ecosystem: String? = null,
         val phase: Phase = Phase.IDLE,

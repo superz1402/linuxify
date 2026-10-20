@@ -58,6 +58,16 @@ under the original `com.termux.*` package names so the prebuilt JNI bridge
 (`libtermux.so`) resolves `Java_com_termux_terminal_JNI_*` symbols. Sessions are real
 PTY processes: `TerminalSession` forks a child with a pseudo-terminal and execs proot.
 
+Session lifecycle: sessions live in the process-scoped `TerminalSessionRegistry`;
+leaving the screen (or backgrounding the app, kept alive by the foreground service)
+never kills them. Closing a session is an explicit, confirmed user action — every
+live tab carries a ✕; a running shell gets a dialog first, then SIGKILL via
+`finishIfRunning()` + `TerminalSessionRegistry.remove()` (the on-disk record is
+finalized, so the transcript stays in history until separately deleted). "CLR" in
+the tab row clears screen + scrollback of the focused session by feeding
+`ESC[H ESC[2J ESC[3J` directly into the emulator — never the child's stdin — so it
+is safe while TUI apps run.
+
 ### Runtime execution
 `proot` (Termux bionic build, pinned + SHA-256 verified, see `runtime-binaries.json`)
 runs with `-0 --link2symlink --kill-on-exit`, binds `/dev`, `/proc`, `/sys`, and the

@@ -81,23 +81,4 @@ class AptCommandsTest {
         assertNull(AptCommands.searchCommand(";;;"))
         assertNull(AptCommands.searchCommand("|&"))
     }
-
-    // ---------------------------------------------------- hasInstalledStatus
-
-    @Test
-    fun `dpkg status output is recognized when installed`() {
-        val out = """
-            Package: htop
-            Status: install ok installed
-            Version: 3.3.0-4build1
-        """.trimIndent()
-        assertTrue(AptCommands.hasInstalledStatus(out))
-    }
-
-    @Test
-    fun `dpkg status output is rejected when removed or absent`() {
-        assertFalse(AptCommands.hasInstalledStatus("Package: htop\nStatus: deinstall ok config-files\n"))
-        assertFalse(AptCommands.hasInstalledStatus(""))
-        assertFalse(AptCommands.hasInstalledStatus("dpkg-query: no packages found matching nope"))
-    }
 }

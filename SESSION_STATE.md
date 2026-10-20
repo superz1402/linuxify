@@ -1,8 +1,46 @@
 # SESSION_STATE.md — Linuxify Android
 
 Concise handoff for the next agent session. Current as of 2026-10-20 (Task
-battery-audit-1 — conditional wake-lock policy + background-work power fixes
-on branch fix/battery-saving @ 25ab729; origin/main = c8c7904).
+terminal-close-clear-1 — terminal session close/clear UI + dead-code sweep +
+wired terminal-history clearing; v0.1.0-alpha.18, origin/main = this commit).
+
+## COMPLETED TASK — terminal close/clear + dead-code sweep (alpha.18)
+
+- USER REQUEST: "work on dead codes if any in the main apk codebase. Also I
+  want an option to close and clear the terminal session when multiple
+  sessions are running."
+- IMPORTANT process lesson: this session first implemented against a stale
+  alpha.5-era clone; push was rejected because parallel sessions had advanced
+  origin/main 21 releases (alpha.6..17). The stale work is preserved on branch
+  `backup/alpha5-based-work`; the real work was REDONE on origin/main @ 3c7f418.
+  RULE: always `git fetch` + inspect origin/main before implementing here.
+- FEATURE (TerminalScreen/SessionTabs): every live tab has a ✕; tab row has
+  CLR (left of "+"). Running shell → confirm dialog → finishIfRunning() +
+  TerminalSessionRegistry.remove() (previously an unreachable registry path —
+  now wired). Ended tabs close silently. Selection math handles the history
+  region shifting after a live close; dialog state holds the session object.
+  CLR injects ESC[H ESC[2J ESC[3J into the emulator (screen + scrollback,
+  stdin untouched — safe under TUI apps) and pokes boundView.onScreenUpdated().
+- WIRED (was dead because unfinished): TerminalPersistence.clearHistory() →
+  Settings > Storage "Clear terminal history…" + confirm dialog (finished
+  sessions only; live sessions untouched). Settings footer version now uses
+  BuildConfig.VERSION_NAME (was hardcoded "0.1.0-alpha.1").
+- REMOVED (verified zero refs): Tokens.kt (whole file), Color.kt
+  TerminalBackground/TerminalForeground, RuntimeMetadata DISTRO_ID +
+  ROOTFS_VERSION_TAG, LinuxRuntime.relativePathOf, ServiceManager
+  saveDefinitions, AptManager.isInstalled + AptCommands.hasInstalledStatus
+  (+2 tests), AppViewModel.removePackages + refreshPackageIndex,
+  TerminalPersistence.recordOf + replaceFromRestore, SoftwareOp.entryId,
+  gradle.properties org.gradle.java.home (host-pinned path; use JAVA_HOME).
+- KEPT + FLAGGED: AppViewModel.installEnvProfile() → EnvManager.installProfile()
+  — complete backend, no UI yet (see Next exact actions).
+- TESTS: 156/156 (-2 = removed hasInstalledStatus tests); assembleDebug +
+  assembleRelease PASS (0.1.0-alpha.18, versionCode 18); cert SHA-256
+  8f55e466… unchanged → overwrite install; feature strings verified in dex.
+- BUILD ENV NOTE: 4 GB host needs reduced heaps for release builds:
+  `./gradlew assembleDebug assembleRelease --no-daemon
+  -Dorg.gradle.jvmargs="-Xmx1152m -XX:MaxMetaspaceSize=384m"
+  -Pkotlin.daemon.jvmargs="-Xmx768m"` (split the two variants if it OOMs).
 
 ## COMPLETED TASK — battery audit (fix/battery-saving @ 25ab729, alpha.17)
 
@@ -406,12 +444,18 @@ on branch fix/battery-saving @ 25ab729; origin/main = c8c7904).
 
 ## Next exact actions
 
-1. User tests alpha.14 on device: drills (e)-(h) from alpha.12, (i)-(vi) from
-   alpha.13, plus (vii)-(viii) above.
-2. Candidate next features: full `dpkg -l` installed-packages screen (the
-   AptCommands.hasInstalledStatus parser is ready for reuse), custom APT
-   repositories, Rust/Cargo adapter, session close button ("×" on ended
-   tabs), in-app self-update.
+1. User installs alpha.18 on device (overwrites alpha.17, same cert). Drill:
+   open two shells (+) → close one via its tab ✕ (confirm dialog appears) →
+   CLR clears screen+scrollback → CLOSE the last one → "No sessions" state.
+   Then Settings > Storage > "Clear terminal history…" and re-visit the
+   terminal history tabs. Plus the outstanding device drills (e)-(h) from
+   alpha.12, (i)-(vi) from alpha.13, (vii)-(viii) from alpha.14.
+2. Candidate next features: wire the EnvManager profile installer into
+   SoftwareScreen (backend `installEnvProfile()`/`installProfile()` is
+   complete and waiting — Base/Developer profiles), custom APT repositories,
+   Rust/Cargo adapter, in-app self-update. (The old "session close button"
+   candidate is DONE in alpha.18; the dpkg -l screen idea lost its parser
+   helper — hasInstalledStatus was removed as dead in alpha.18.)
 3. Known accepted limitations (documented, not bugs): software op state is
    in-memory only (process death clears the card; installed state re-probes on
    next visit); in-flight installs cannot be cancelled from the UI yet.

@@ -613,3 +613,35 @@ Stage Summary:
 - LIVE: https://bilal140202.github.io/linuxify-app/ — all 7 routes return 200, custom 404 active, APK download verified 200.
 - Mirror release: https://github.com/Bilal140202/linuxify-app/releases/tag/v0.1.0-alpha.15 (12,568,978 B, SHA-256 bb40ef63c643436f0527cf7e36ac9bbabe2813803b65b9f6dd1d03beb34e4177).
 - Production unchanged: releases still ship from this repo's cycle. Per-release mirror refresh procedure is documented in the site repo's AGENTS.md.
+
+---
+Task ID: terminal-close-clear-1
+Agent: Z (main agent, continuation session)
+Task: User request: (a) work on dead code in the main APK codebase, (b) add an option to close and clear terminal sessions when multiple sessions are running. Verify, push, update worklogs.
+
+Work Log:
+- CRITICAL context recovery: this session started from a stale alpha.5-era clone; a first implementation was built and verified there, but the push was rejected — origin/main had advanced 21 releases in parallel sessions (alpha.6..17: Termux-true terminal UX, session registry + persistence/history, foreground service, software management system, power policy, backup/restore, landing page docs). The alpha.5-based work was preserved on branch backup/alpha5-based-work and the mainline work REDONE against origin/main @ 3c7f418. Lesson recorded: always `git fetch` + diff against origin BEFORE implementing on this repo.
+- Terminal close & clear (on the alpha.18 tree):
+  * SessionTabs: every LIVE tab now carries a compact ✕ (inner clickable consumes the tap — never double-fires the tab's own select); the tab row gains CLR (left of "+"), enabled only when a live session is focused. Works for 1..N sessions.
+  * Closing a RUNNING shell: AlertDialog ("everything running inside it will be terminated… transcript stays in terminal history") → SIGKILL via finishIfRunning() → TerminalSessionRegistry.remove() — which was previously an UNREACHABLE code path (defined, unit-of-one caller: nothing) — now wired. Ended tabs close silently.
+  * Selection math after close: history region (indices after live sessions) shifts left by one; handled explicitly, empty-live-list falls back to index 0 (history pane or "No sessions"). Dialog state holds the SESSION object, not an index — indices shift, objects don't.
+  * CLR: ESC[H ESC[2J ESC[3J appended directly into TerminalEmulator (vendored code handles CSI 3J = clearTranscript) — clears screen AND scrollback without touching the child's stdin, safe while vim/htop run; redraw poked via sessionClient.boundView.onScreenUpdated() because redraws on this screen are callback-driven, not recomposition-driven.
+- Dead-code audit RE-RUN on the alpha.17 tree (declarations cross-referenced across main+test). The old alpha.5 findings had shifted: rootfsReady() is now USED by SoftwareManager (kept); PackagesScreen was replaced by SoftwareScreen (its install/remove paths live). Removed, verified zero refs:
+  * RuntimeMetadata.DISTRO_ID + ROOTFS_VERSION_TAG
+  * Color.kt TerminalBackground + TerminalForeground (TerminalScreen defines its own Termux palette)
+  * ui/theme/Tokens.kt — whole file (Spacing.*/Motion.* have zero qualified uses and no wildcard imports; screens use Termux-style hardcoded values since alpha.7)
+  * LinuxRuntime.relativePathOf(); ServiceManager.saveDefinitions()
+  * AptManager.isInstalled() + AptCommands.hasInstalledStatus() (+ its 2 tests) — production caller never existed after the Software system landed its own per-tool verification
+  * AppViewModel.removePackages() + refreshPackageIndex() — unreachable since the Software screen replaced PackagesScreen (apt.remove/refreshIndex themselves are USED by SoftwareManager/EnvManager — kept)
+  * TerminalPersistence.recordOf() + replaceFromRestore() — superseded by the file-level backup restore (BackupManager copies runtime/terminal directly)
+  * SoftwareManager.SoftwareOp.entryId — declared, never passed or read
+  * gradle.properties org.gradle.java.home — pinned old-host JDK path (broke this build; removed; JDK comes from JAVA_HOME per docs/BUILDING.md)
+- Dead because unfinished, WIRED instead of deleted: TerminalPersistence.clearHistory() (zero callers) → NEW Settings > Storage "Clear terminal history…" with a report-style confirm dialog (deletes only FINISHED sessions' records+logs; live sessions untouched; result surfaced via the screen's message channel). Also fixed the Settings footer version string: hardcoded "0.1.0-alpha.1" → BuildConfig.VERSION_NAME.
+- Kept + flagged (NOT deleted): AppViewModel.installEnvProfile() → EnvManager.installProfile() — a complete, recovery-guarded profile-install backend (alpha.12) with no UI entry yet; needs a SoftwareScreen profile picker (next-actions item). Deleting working feature backends awaiting UI is a product decision, not a cleanup.
+- Build environment: rebuilt on this host (Temurin JDK 21 @ /home/z/toolchain/jdk21 + SDK platform-35/build-tools 35.0.0). RAM discipline: 4 GB host OOM-kills default-heap Gradle daemons during release — build with --no-daemon + -Dorg.gradle.jvmargs="-Xmx1152m -XX:MaxMetaspaceSize=384m" -Pkotlin.daemon.jvmargs="-Xmx768m", variants split.
+- Verification: 156/156 unit tests (was 158; -2 = removed hasInstalledStatus tests, -0 regressions: 18 test classes green incl. new TerminalRecordTest/SoftwareCatalogTest/PowerPolicyTest); assembleDebug + assembleRelease SUCCESS; aapt: versionCode 18 / versionName 0.1.0-alpha.18; apksigner cert SHA-256 8f55e466… unchanged → overwrite install; "Close this shell?" + "Clear terminal history?" strings confirmed in classes.dex.
+
+Stage Summary:
+- Deliverable: linuxify v0.1.0-alpha.18 (release 12,578,162 B + debug 18,856,098 B in the GitHub release + download/).
+- Terminal sessions can finally be closed (explicit + confirmed) and cleared from the UI; the previously unreachable registry.remove/clearHistory paths are live features; the codebase is ~200 lines of verified-dead code lighter.
+- Honest limits: close/clear verified statically + by tests on host; the device drill (open 2 shells → ✕ one → CLR → close) is the user's step, as usual. EnvManager profile install still awaits its UI (flagged in SESSION_STATE).
