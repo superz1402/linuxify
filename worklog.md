@@ -576,3 +576,22 @@ Work Log:
 Stage Summary:
 - User-facing: Projects tab is ALWAYS the project list; "Open terminal" starts the shell INSIDE the project (proot -w); "Browse files" opens Files in the project; listing costs 1 proot spawn instead of 2N. Awaiting user device drill: (a) Projects → Open terminal → shell prompt is in /root/projects/<name>; (b) tap Projects tab → project list shows immediately, never the terminal; (c) Browse files → Files starts in the project dir; (d) services/menu behavior unchanged.
 - origin/main = 459505c9be62c8baea4576802e3b5b7cd5f79e6d. audit/proprietary-distribution still holds the licensing audit deliverables (b997868, 955879f, ad7a350, 88813ad) pending merge.
+
+---
+Task ID: battery-audit-1
+Agent: Z.ai main agent
+Task: "Check on battery saving without missing anything" — full battery audit + fixes (alpha.17)
+
+Work Log:
+- Full sweep of 45 Kotlin files: wakelocks, FGS lifecycle, while(true) loops, timers, probes, I/O cadence, blinker, theme, manifest.
+- CRITICAL finding: RuntimeForegroundService held an UNCONDITIONAL PARTIAL_WAKE_LOCK for up to 6h whenever ANY session existed — an idle bash kept the CPU out of deep sleep. Not Termux's model (Termux's lock is opt-in).
+- Implemented runtime/PowerPolicy.kt — single, unit-tested decision point: wake lock ONLY while a managed service runs, a long op is in flight (install/download/apt/clone/backup/restore — 11 ops wrapped with opBegin/opEnd try/finally in AppViewModel), or user opts in (new Settings > Battery toggle) with a live session.
+- Service de-waked: no lock of its own; reevaluates at onStartCommand/stopIfIdle/onDestroy. stopIfIdle recomputes BEFORE its early returns.
+- Background battery: transcript sweep 10s→60s when app backgrounded (ON_STOP flush covers data safety); free-storage check paused when backgrounded (LinuxifyApp.isInForeground).
+- ProjectsManager.list(force): batched git probe cached 30s TTL, clock-skew safe (negative age = stale — caught by test during development); create/clone/cache-clear force a re-probe.
+- RootfsInstaller: download progress emissions throttled to 100ms (was per 64KB chunk → thousands of recompositions per download).
+- Tests: +14 (PowerPolicyTest x10, ProjectsProbeTtlTest x4). 158/158 PASS; lintRelease PASS; assembleRelease PASS.
+- ENV RECOVERY NOTE: a second environment rollback destroyed the un-pushed alpha.16 source (branch commits + working tree) between sessions; only the built APK + worklog survived. alpha.17 (versionCode 17) is a faithful re-implementation from the documented design; APK sha256 bd344d5e...c8d8ce. LESSON: push immediately after verification.
+
+Stage Summary:
+- fix/battery-saving @ 25ab729 pushed and ls-remote verified; SESSION_STATE.md updated on the branch. Pending: PR/merge to main, device drill (toggle, idle-shell drain, server liveness with screen off).

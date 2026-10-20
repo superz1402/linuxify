@@ -1,9 +1,48 @@
 # SESSION_STATE.md — Linuxify Android
 
-Concise handoff for the next agent session. Current as of 2026-10-19 (Task 23 —
-durable persistence, backup/restore, cache management on main: terminal
-transcripts on disk, SAF tar.gz backup/restore, report-then-confirm cache
-clearing; origin/main = d0b3a73).
+Concise handoff for the next agent session. Current as of 2026-10-20 (Task
+battery-audit-1 — conditional wake-lock policy + background-work power fixes
+on branch fix/battery-saving @ 25ab729; origin/main = c8c7904).
+
+## COMPLETED TASK — battery audit (fix/battery-saving @ 25ab729, alpha.17)
+
+- USER REQUEST: "Check on battery saving without missing anything" — full
+  battery-usage audit of every loop/timer/service/wakelock/polling path.
+- AUDIT RESULT (45 Kotlin files swept): the one critical finding was
+  RuntimeForegroundService holding an UNCONDITIONAL PARTIAL_WAKE_LOCK for up
+  to 6 h whenever ANY shell session existed — an idle bash kept the CPU out of
+  deep sleep for hours. NOT Termux's model (Termux's wake lock is opt-in).
+  Also: 10s transcript sweep + 30s storage check ran while backgrounded;
+  Projects tab landing re-spawned proot+git probe every time; installer
+  emitted a StateFlow update per 64 KB download chunk. Verified OK: terminal
+  I/O threads block (no busy-wait), cursor blinker off, no alarms/polling,
+  memoized guest patches.
+- FIXES (runtime/PowerPolicy.kt is the single decision point, unit-tested):
+  wake lock ONLY while a managed service runs OR a long op is in flight
+  (rootfs install, apt install/remove/upgrade/update, env profile, catalog
+  install/remove, project clone, backup/restore — all wrapped in
+  PowerPolicy.opBegin/opEnd try/finally in AppViewModel) OR the user opts in
+  via NEW Settings > Battery toggle ("Keep CPU awake while shells run",
+  persisted in power_policy prefs) with a live session. Service no longer
+  owns a lock; reevaluates at onStartCommand/stopIfIdle/onDestroy. Idle shell
+  + toggle off = CPU may sleep (process still survives via FGS).
+  Background: transcript sweep 10s->60s (ON_STOP flush covers data safety);
+  storage check paused when backgrounded (LinuxifyApp.isInForeground).
+  ProjectsManager.list(force) caches the batched git probe for 30 s TTL,
+  clock-skew safe (negative age = stale, caught by test); mutations force.
+  RootfsInstaller download progress throttled to 100 ms.
+- TESTS: 158/158 (+14: PowerPolicyTest x10, ProjectsProbeTtlTest x4);
+  lintRelease PASS; assembleRelease PASS (0.1.0-alpha.17, versionCode 17,
+  APK bd344d5ebc1f456408fca0b94cea3954582c414fd5f7001b935c83266ec8d8ce in
+  download/linuxify-0.1.0-alpha.17.apk).
+- HISTORY NOTE: the original battery implementation (alpha.16) was lost to a
+  second environment rollback BEFORE it was pushed (only the APK + worklog
+  survived); alpha.17 is a faithful re-implementation verified against the
+  documented design and the alpha.16 APK checksum. LESSON APPLIED: code is
+  pushed immediately after verification, docs follow.
+- Device drill pending (user): Settings > Battery toggle on/off; background
+  an idle shell with screen off and confirm no abnormal battery drain in
+  system stats; run a server and confirm it stays alive.
 
 ## COMPLETED TASK — issue #23: persistence, backup/restore, cache management (on main)
 
