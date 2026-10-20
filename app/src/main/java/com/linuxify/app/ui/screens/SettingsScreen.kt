@@ -24,11 +24,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.linuxify.app.backup.BackupManager
 import com.linuxify.app.maintenance.MaintenanceManager
 import com.linuxify.app.runtime.LinuxRuntime
+import com.linuxify.app.runtime.PowerPolicy
 import com.linuxify.app.runtime.RuntimeDirs
 import com.linuxify.app.ui.AppViewModel
 import com.linuxify.app.ui.components.FactRow
@@ -66,6 +68,11 @@ fun SettingsScreen(vm: AppViewModel) {
     var restoreTerminal by remember { mutableStateOf(true) }
     var restoreRootfs by remember { mutableStateOf(false) }
     var restoreReplaceProjects by remember { mutableStateOf(false) }
+
+    // Battery policy toggle (alpha.17 battery audit): default OFF — the CPU is
+    // allowed to sleep when only idle shells exist.
+    val appCtx = LocalContext.current
+    var stayAwake by remember { mutableStateOf(PowerPolicy.stayAwakeEnabled(appCtx)) }
 
     val createBackupLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/gzip"),
@@ -112,6 +119,30 @@ fun SettingsScreen(vm: AppViewModel) {
                     onClick = { vm.systemCacheReport { cacheReport = it } },
                     modifier = Modifier.padding(top = 8.dp),
                 ) { Text("Clear caches (whole system)…") }
+            }
+        }
+
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Battery", style = MaterialTheme.typography.titleMedium)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = stayAwake,
+                        onCheckedChange = { on ->
+                            stayAwake = on
+                            PowerPolicy.setStayAwake(appCtx, on)
+                        },
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text("Keep CPU awake while shells run", style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                Text(
+                    "Off (recommended): when the screen turns off the CPU may sleep unless a managed service is running or something is downloading/installing — background shells pause, zero extra drain. " +
+                        "On: background shell sessions keep computing at full speed (Termux's optional wake-lock behavior) at a real battery cost.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
 

@@ -6,7 +6,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
-import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import com.linuxify.app.MainActivity
 import com.linuxify.app.R
@@ -22,18 +21,17 @@ import com.linuxify.app.R
  * "this app is doing real work" — the process is then not killed except under
  * extreme pressure or by the user.
  *
- * Also holds a PARTIAL wake lock while running: without it, Doze suspends
- * network and defers CPU once the screen goes off, silently freezing long
- * downloads/servers. This costs battery — it runs only while the user has
- * live sessions/services, and is released the moment the last one ends.
+ * Wake lock policy lives in [PowerPolicy] (battery audit, alpha.17): this
+ * service itself holds NO wake lock. The lock is conditional — held only
+ * while a managed service runs, a long operation (download/install/apt/
+ * backup) is in flight, or the user opted in via Settings > Battery with a
+ * live session. An idle shell no longer keeps the CPU out of deep sleep.
  *
  * Honest scope: this protects against ordinary background eviction. It cannot
  * protect against the user force-stopping the app, OEM task managers ( MIUI/
  * etc. kill lists), or extreme memory pressure. Documented, not promised.
  */
 class RuntimeForegroundService : Service() {
-
-    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -42,13 +40,10 @@ class RuntimeForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startAsForeground()
-        // Release any previous lock first: onStartCommand runs again after a
-        // START_STICKY restart, and re-acquiring without releasing would leak
-        // the old lock until its 6 h timeout (battery drain for nothing).
-        wakeLock?.let { if (it.isHeld) it.release() }
-        wakeLock = (getSystemService(Context.POWER_SERVICE) as? PowerManager)
-            ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "linuxify:runtime")
-            ?.apply { setReferenceCounted(false); acquire(WAKELOCK_MS) }
+        // Battery policy (alpha.17): recompute the conditional wake lock for the
+        // new reality. Covers session begin (registry.add → start) and service
+        // begin (ServiceManager.start → start), including START_STICKY restarts.
+        PowerPolicy.reevaluate(this)
         // START_STICKY: if the system does kill us under pressure, ask for a
         // restart (sessions themselves are gone at that point — honest state
         // is re-derived by the app on relaunch).
@@ -76,8 +71,10 @@ class RuntimeForegroundService : Service() {
     }
 
     override fun onDestroy() {
-        wakeLock?.let { if (it.isHeld) it.release() }
-        wakeLock = null
+        // Recompute before teardown: on an idle stop nothing is live, so the
+        // policy releases the lock; on a system-cancel with live sessions the
+        // user's opt-in keeps it (START_STICKY brings the service back).
+        PowerPolicy.reevaluate(this)
         super.onDestroy()
     }
 
@@ -85,9 +82,6 @@ class RuntimeForegroundService : Service() {
 
     companion object {
         private const val NOTIF_ID = 42
-        /** 6 h re-arm cap: the system caps wakelocks anyway; re-acquire by an explicit
-            user action (opening the app / restarting a run) after that. */
-        private const val WAKELOCK_MS = 6 * 60 * 60 * 1000L
 
         /** Call whenever live work begins (a shell session spawns, a service starts). */
         fun start(ctx: Context) {
@@ -102,6 +96,9 @@ class RuntimeForegroundService : Service() {
 
         /** Call whenever live work ends; stops the service if nothing is left. */
         fun stopIfIdle(ctx: Context) {
+            // Recompute the wake lock FIRST: a service/session just ended, so a
+            // justification may have dropped even while other work stays live.
+            PowerPolicy.reevaluate(ctx)
             if (com.linuxify.app.terminal.TerminalSessionRegistry.hasLiveSessions()) return
             if (com.linuxify.app.srv.ServiceManager.activeCount > 0) return
             ctx.stopService(Intent(ctx, RuntimeForegroundService::class.java))

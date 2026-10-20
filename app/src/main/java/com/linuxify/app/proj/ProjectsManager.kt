@@ -23,7 +23,17 @@ class ProjectsManager(private val ctx: Context) {
 
     private val projectsDir: File get() = RuntimeDirs.projectsDir(ctx)
 
-    suspend fun list(): List<Project> = withContext(Dispatchers.IO) {
+    // Probe TTL cache (battery audit, alpha.17): the git probe spawns ONE proot
+    // process per call. Projects tab landings used to re-run it every time —
+    // now the result is fresh for PROBE_TTL_MS, tab flips are free, and any
+    // mutating action (create/clone/cache-clear) forces a real refresh.
+    @Volatile
+    private var probeCache: Map<String, Pair<String?, Int?>>? = null
+
+    @Volatile
+    private var probeCachedAtMs: Long? = null
+
+    suspend fun list(force: Boolean = false): List<Project> = withContext(Dispatchers.IO) {
         val dirs = projectsDir.listFiles()
             ?.filter { it.isDirectory }
             ?.sortedBy { it.name.lowercase() }
@@ -33,9 +43,21 @@ class ProjectsManager(private val ctx: Context) {
         // spawned twice per project (branch + dirty count) on every refresh.
         // A failed/blocked probe degrades to "no git info" for all projects —
         // the same display the old per-dir failure path produced.
-        val probe = runCatching { batchGitProbe() }
-            .onFailure { CrashReporter.logNonFatal(ctx, "projects.batchGitProbe", it) }
-            .getOrDefault(emptyMap())
+        val fresh = !force && probeCacheFresh(probeCachedAtMs, System.currentTimeMillis())
+        val probe: Map<String, Pair<String?, Int?>> = if (fresh) {
+            probeCache ?: emptyMap()
+        } else {
+            runCatching { batchGitProbe() }
+                .onFailure { CrashReporter.logNonFatal(ctx, "projects.batchGitProbe", it) }
+                .map { m ->
+                    // Cache only a probe that actually RAN (even if it found no
+                    // git repos); an exception path must not poison the cache.
+                    probeCache = m
+                    probeCachedAtMs = System.currentTimeMillis()
+                    m
+                }
+                .getOrDefault(emptyMap())
+        }
         dirs.map { dir ->
             val info = probe[dir.name]
             Project(dir.name, dir, info?.first, info?.second)
@@ -110,6 +132,17 @@ class ProjectsManager(private val ctx: Context) {
     }
 
     companion object {
+        /** How long a batched git-probe result is reused without re-spawning proot. */
+        const val PROBE_TTL_MS: Long = 30_000L
+
+        /**
+         * Pure freshness check (unit-tested). A cached-at timestamp in the
+         * FUTURE (device clock stepped backwards between calls) reads as
+         * NOT fresh — a negative age must never count as "still young".
+         */
+        fun probeCacheFresh(cachedAtMs: Long?, nowMs: Long, ttlMs: Long = PROBE_TTL_MS): Boolean =
+            cachedAtMs != null && nowMs >= cachedAtMs && nowMs - cachedAtMs < ttlMs
+
         /**
          * Parse the batched git-probe output (issue #22).
          *

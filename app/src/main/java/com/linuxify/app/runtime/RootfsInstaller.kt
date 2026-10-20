@@ -23,6 +23,13 @@ import java.net.URL
  */
 class RootfsInstaller(private val ctx: Context) {
 
+    private companion object {
+        /** Battery audit (alpha.17): min interval between Downloading progress
+            emissions — a StateFlow update per 64 KB chunk meant thousands of
+            recompositions per download for zero visual gain. */
+        const val PROGRESS_EMIT_INTERVAL_MS = 100L
+    }
+
     sealed class InstallState {
         data object NotInstalled : InstallState()
         data object Checking : InstallState()
@@ -453,6 +460,10 @@ class RootfsInstaller(private val ctx: Context) {
                 java.io.FileOutputStream(part, resume).use { out ->
                     val buf = ByteArray(64 * 1024)
                     var readTotal = if (resume) part.length() else 0L
+                    // Throttle progress emission (battery audit): ~10 updates/s
+                    // is far beyond what the progress bar can render; the final
+                    // state transition (Verifying) is emitted unconditionally.
+                    var lastEmitMs = 0L
                     while (true) {
                         if (cancelled) throw RuntimeError.Cancelled
                         if (!currentCoroutineContext().isActive) throw RuntimeError.Cancelled
@@ -460,7 +471,11 @@ class RootfsInstaller(private val ctx: Context) {
                         if (n < 0) break
                         out.write(buf, 0, n)
                         readTotal += n
-                        _state.value = InstallState.Downloading(readTotal, total)
+                        val now = System.currentTimeMillis()
+                        if (now - lastEmitMs >= PROGRESS_EMIT_INTERVAL_MS) {
+                            lastEmitMs = now
+                            _state.value = InstallState.Downloading(readTotal, total)
+                        }
                     }
                     out.flush()
                 }

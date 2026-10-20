@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.linuxify.app.LinuxifyApp
 import com.linuxify.app.pkg.AptManager
 import com.linuxify.app.pkg.CatalogEntry
 import com.linuxify.app.pkg.EnvCore
@@ -17,6 +18,7 @@ import com.linuxify.app.maintenance.MaintenanceManager
 import com.linuxify.app.runtime.CrashReporter
 import com.linuxify.app.runtime.GuestPatches
 import com.linuxify.app.runtime.LinuxRuntime
+import com.linuxify.app.runtime.PowerPolicy
 import com.linuxify.app.runtime.RootfsInstaller
 import com.linuxify.app.runtime.RuntimeDirs
 import com.linuxify.app.runtime.RuntimeMetadata
@@ -117,21 +119,33 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
         refreshHomeFacts()
         viewModelScope.launch(bgGuard) {
-            // periodic refresh of free-space warning while the app is open (cheap check)
+            // periodic refresh of free-space warning while the app is open.
+            // Battery audit (alpha.17): when backgrounded this check is pure
+            // waste — the warning card is not visible and RuntimeDirs does a
+            // filesystem stat walk. Sleep through background ticks.
             while (true) {
-                val free = RuntimeDirs.availableBytes(ctx)
-                _storageWarning.value = if (free < 512L * 1024 * 1024) {
-                    "Low storage: ${LinuxRuntime.humanSize(free)} free. Package installs and servers may fail."
-                } else null
-                kotlinx.coroutines.delay(30_000)
+                if (LinuxifyApp.isInForeground) {
+                    val free = RuntimeDirs.availableBytes(ctx)
+                    _storageWarning.value = if (free < 512L * 1024 * 1024) {
+                        "Low storage: ${LinuxRuntime.humanSize(free)} free. Package installs and servers may fail."
+                    } else null
+                    kotlinx.coroutines.delay(30_000)
+                } else {
+                    kotlinx.coroutines.delay(60_000)
+                }
             }
         }
         viewModelScope.launch(Dispatchers.IO + bgGuard) {
             // Terminal transcript persistence loop (issue #23): snapshot dirty
-            // sessions every 10s — the disk write itself is throttled to once
+            // sessions periodically — the disk write itself is throttled to once
             // per 3s per session and skipped entirely when unchanged.
+            // Battery audit (alpha.17): 10s cadence in the foreground keeps
+            // crash loss small; in the background the ON_STOP flush already
+            // captured everything, so the sweep drops to a 60s safety net
+            // instead of waking the CPU every 10 seconds for nothing.
             while (true) {
-                kotlinx.coroutines.delay(10_000)
+                val fg = runCatching { LinuxifyApp.isInForeground }.getOrDefault(true)
+                kotlinx.coroutines.delay(if (fg) 10_000 else 60_000)
                 runCatching { TerminalPersistence.sweep(ctx) }
                     .onFailure { CrashReporter.logNonFatal(getApplication(), "TerminalPersistence.sweep", it) }
             }
@@ -171,15 +185,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun startInstall() {
         viewModelScope.launch(bgGuard) {
-            installer.install()
-            refreshHomeFacts()
-            // Base environment (curl + ca-certificates) is part of the DEFAULT
-            // install — the Dependency & Package Recovery Manager installs it
-            // right after the rootfs is ready. Best-effort: if it fails (e.g.
-            // offline), the Packages screen shows the pending state and the
-            // same profile can be installed with one tap later.
-            runCatching { env.installProfile(EnvCore.PROFILE_BASE.id) }
-                .onFailure { CrashReporter.logNonFatal(getApplication(), "env base install", it) }
+            // Long-op marker: download/extract may run many minutes with no
+            // session or service live — this is exactly when the CPU must not
+            // be allowed to Doze-sleep mid-download (PowerPolicy, alpha.17).
+            PowerPolicy.opBegin(ctx)
+            try {
+                installer.install()
+                refreshHomeFacts()
+                // Base environment (curl + ca-certificates) is part of the DEFAULT
+                // install — the Dependency & Package Recovery Manager installs it
+                // right after the rootfs is ready. Best-effort: if it fails (e.g.
+                // offline), the Packages screen shows the pending state and the
+                // same profile can be installed with one tap later.
+                runCatching { env.installProfile(EnvCore.PROFILE_BASE.id) }
+                    .onFailure { CrashReporter.logNonFatal(getApplication(), "env base install", it) }
+            } finally {
+                PowerPolicy.opEnd(ctx)
+            }
         }
     }
 
@@ -231,10 +253,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun consumePendingFilesStartDir(): String? =
         pendingFilesStartDir.also { pendingFilesStartDir = null }
 
-    fun refreshProjects() {
+    /**
+     * @param force bypass the 30s probe TTL cache (battery audit): mutations
+     *              (create/clone/cache-clear) must always re-probe for real.
+     */
+    fun refreshProjects(force: Boolean = false) {
         viewModelScope.launch(Dispatchers.IO + bgGuard) {
             _projectsState.value = _projectsState.value.copy(loading = true)
-            val list = runCatching { projects.list() }
+            val list = runCatching { projects.list(force) }
                 .onFailure {
                     CrashReporter.logNonFatal(getApplication(), "refreshProjects", it)
                     _projectsState.value = _projectsState.value.copy(
@@ -253,23 +279,28 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             _projectsState.value = _projectsState.value.copy(
                 message = res.fold({ "Project '$name' created" }, { it.message }),
             )
-            refreshProjects()
+            refreshProjects(force = true)
         }
     }
 
     fun cloneProject(url: String) {
         viewModelScope.launch(Dispatchers.IO + bgGuard) {
-            _projectsState.value = _projectsState.value.copy(busy = true, log = emptyList())
-            val res = runCatching {
-                projects.clone(url) { line ->
-                    _projectsState.value = _projectsState.value.copy(log = _projectsState.value.log + line)
-                }
-            }.getOrElse { Result.failure(it) }
-            _projectsState.value = _projectsState.value.copy(
-                busy = false,
-                message = res.fold({ "Cloned ${res.getOrNull()}" }, { "Clone failed: ${it.message}" }),
-            )
-            refreshProjects()
+            PowerPolicy.opBegin(ctx)
+            try {
+                _projectsState.value = _projectsState.value.copy(busy = true, log = emptyList())
+                val res = runCatching {
+                    projects.clone(url) { line ->
+                        _projectsState.value = _projectsState.value.copy(log = _projectsState.value.log + line)
+                    }
+                }.getOrElse { Result.failure(it) }
+                _projectsState.value = _projectsState.value.copy(
+                    busy = false,
+                    message = res.fold({ "Cloned ${res.getOrNull()}" }, { "Clone failed: ${it.message}" }),
+                )
+                refreshProjects(force = true)
+            } finally {
+                PowerPolicy.opEnd(ctx)
+            }
         }
     }
 
@@ -312,47 +343,57 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun installPackages(vararg names: String, onDone: (AptManager.Operation) -> Unit) {
         viewModelScope.launch(bgGuard) {
-            // Dependency & Package Recovery Manager: repair the package manager
-            // BEFORE installing anything else — but only when it is actually
-            // inconsistent (never a blind dpkg --configure -a). A probe failure
-            // must not block a plain install attempt.
-            val healthy = runCatching { env.ensureHealthyOnly() }.getOrElse {
-                CrashReporter.logNonFatal(getApplication(), "env ensureHealthyOnly", it)
-                true
-            }
-            val op = if (!healthy) {
-                AptManager.Operation(
-                    AptManager.Operation.Kind.INSTALL,
-                    AptManager.Operation.State.FAILED,
-                    listOf(env.state.value.failureHint ?: "package manager is inconsistent — repair it first (Software > Environment > Repair package manager)"),
-                )
-            } else {
-                runCatching { apt.install(*names) }.getOrElse {
-                    CrashReporter.logNonFatal(getApplication(), "apt install", it)
+            PowerPolicy.opBegin(ctx)
+            try {
+                // Dependency & Package Recovery Manager: repair the package manager
+                // BEFORE installing anything else — but only when it is actually
+                // inconsistent (never a blind dpkg --configure -a). A probe failure
+                // must not block a plain install attempt.
+                val healthy = runCatching { env.ensureHealthyOnly() }.getOrElse {
+                    CrashReporter.logNonFatal(getApplication(), "env ensureHealthyOnly", it)
+                    true
+                }
+                val op = if (!healthy) {
                     AptManager.Operation(
                         AptManager.Operation.Kind.INSTALL,
                         AptManager.Operation.State.FAILED,
-                        listOf(it.message ?: it.javaClass.simpleName),
+                        listOf(env.state.value.failureHint ?: "package manager is inconsistent — repair it first (Software > Environment > Repair package manager)"),
                     )
+                } else {
+                    runCatching { apt.install(*names) }.getOrElse {
+                        CrashReporter.logNonFatal(getApplication(), "apt install", it)
+                        AptManager.Operation(
+                            AptManager.Operation.Kind.INSTALL,
+                            AptManager.Operation.State.FAILED,
+                            listOf(it.message ?: it.javaClass.simpleName),
+                        )
+                    }
                 }
+                onDone(op)
+                refreshHomeFacts()
+            } finally {
+                PowerPolicy.opEnd(ctx)
             }
-            onDone(op)
-            refreshHomeFacts()
         }
     }
 
     fun removePackages(vararg names: String, onDone: (AptManager.Operation) -> Unit) {
         viewModelScope.launch(bgGuard) {
-            val op = runCatching { apt.remove(*names) }.getOrElse {
-                CrashReporter.logNonFatal(getApplication(), "apt remove", it)
-                AptManager.Operation(
-                    AptManager.Operation.Kind.REMOVE,
-                    AptManager.Operation.State.FAILED,
-                    listOf(it.message ?: it.javaClass.simpleName),
-                )
+            PowerPolicy.opBegin(ctx)
+            try {
+                val op = runCatching { apt.remove(*names) }.getOrElse {
+                    CrashReporter.logNonFatal(getApplication(), "apt remove", it)
+                    AptManager.Operation(
+                        AptManager.Operation.Kind.REMOVE,
+                        AptManager.Operation.State.FAILED,
+                        listOf(it.message ?: it.javaClass.simpleName),
+                    )
+                }
+                onDone(op)
+                refreshHomeFacts()
+            } finally {
+                PowerPolicy.opEnd(ctx)
             }
-            onDone(op)
-            refreshHomeFacts()
         }
     }
 
@@ -367,8 +408,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun refreshPackageIndex() {
         viewModelScope.launch(bgGuard) {
-            runCatching { apt.refreshIndex() }
-                .onFailure { CrashReporter.logNonFatal(getApplication(), "apt update", it) }
+            PowerPolicy.opBegin(ctx)
+            try {
+                runCatching { apt.refreshIndex() }
+                    .onFailure { CrashReporter.logNonFatal(getApplication(), "apt update", it) }
+            } finally {
+                PowerPolicy.opEnd(ctx)
+            }
         }
     }
 
@@ -383,29 +429,44 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun installCatalogEntry(entry: CatalogEntry) {
         viewModelScope.launch(bgGuard) {
-            runCatching { software.install(entry) }
-                .onFailure { CrashReporter.logNonFatal(getApplication(), "installCatalogEntry", it) }
-            refreshHomeFacts()
+            PowerPolicy.opBegin(ctx)
+            try {
+                runCatching { software.install(entry) }
+                    .onFailure { CrashReporter.logNonFatal(getApplication(), "installCatalogEntry", it) }
+                refreshHomeFacts()
+            } finally {
+                PowerPolicy.opEnd(ctx)
+            }
         }
     }
 
     fun removeCatalogEntry(entry: CatalogEntry) {
         viewModelScope.launch(bgGuard) {
-            runCatching { software.remove(entry) }
-                .onFailure { CrashReporter.logNonFatal(getApplication(), "removeCatalogEntry", it) }
-            refreshHomeFacts()
+            PowerPolicy.opBegin(ctx)
+            try {
+                runCatching { software.remove(entry) }
+                    .onFailure { CrashReporter.logNonFatal(getApplication(), "removeCatalogEntry", it) }
+                refreshHomeFacts()
+            } finally {
+                PowerPolicy.opEnd(ctx)
+            }
         }
     }
 
     /** One-tap index refresh + full APT upgrade, after a health check. */
     fun upgradePackages() {
         viewModelScope.launch(bgGuard) {
-            runCatching {
-                if (!env.ensureHealthyOnly()) return@runCatching
-                apt.refreshIndex()
-                apt.fullUpgrade()
-            }.onFailure { CrashReporter.logNonFatal(getApplication(), "upgradePackages", it) }
-            refreshHomeFacts()
+            PowerPolicy.opBegin(ctx)
+            try {
+                runCatching {
+                    if (!env.ensureHealthyOnly()) return@runCatching
+                    apt.refreshIndex()
+                    apt.fullUpgrade()
+                }.onFailure { CrashReporter.logNonFatal(getApplication(), "upgradePackages", it) }
+                refreshHomeFacts()
+            } finally {
+                PowerPolicy.opEnd(ctx)
+            }
         }
     }
 
@@ -452,9 +513,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun installEnvProfile(profileId: String) {
         viewModelScope.launch(bgGuard) {
-            runCatching { env.installProfile(profileId) }
-                .onFailure { CrashReporter.logNonFatal(getApplication(), "env install profile", it) }
-            refreshHomeFacts()
+            PowerPolicy.opBegin(ctx)
+            try {
+                runCatching { env.installProfile(profileId) }
+                    .onFailure { CrashReporter.logNonFatal(getApplication(), "env install profile", it) }
+                refreshHomeFacts()
+            } finally {
+                PowerPolicy.opEnd(ctx)
+            }
         }
     }
 
@@ -488,6 +554,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 .onFailure { CrashReporter.logNonFatal(getApplication(), "clearProjectCaches", it) }
                 .getOrDefault(0L)
             refreshHomeFacts()
+            // Deleting caches inside a project changes its git dirty count —
+            // bypass the probe TTL cache so the Projects screen shows reality.
+            refreshProjects(force = true)
             withContext(kotlinx.coroutines.Dispatchers.Main) {
                 onDone("Cleared project caches: ${LinuxRuntime.humanSize(freed)} freed")
             }
@@ -539,32 +608,37 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun createBackup(uri: Uri, includeRootfs: Boolean) {
         viewModelScope.launch(Dispatchers.IO + bgGuard) {
             _backupState.value = BackupUiState(busy = true, progress = "preparing…")
+            PowerPolicy.opBegin(ctx)
             val scopes = buildSet {
                 add(BackupManager.Scope.PROJECTS)
                 add(BackupManager.Scope.TERMINAL)
                 if (includeRootfs) add(BackupManager.Scope.ROOTFS)
             }
-            val result = runCatching {
-                ctx.contentResolver.openOutputStream(uri)?.use { out ->
-                    backup.createBackup(out, scopes) { p ->
-                        _backupState.value = _backupState.value.copy(progress = p)
-                    }
-                } ?: throw IllegalStateException("could not open the selected location for writing")
-            }.getOrElse { Result.failure(it) }
-            result.fold(
-                { m ->
-                    _backupState.value = BackupUiState(
-                        busy = false,
-                        message = "Backup created — projects: ${m.projectNames.size}, terminal sessions: ${m.terminalCount}" +
-                            if (m.rootfsIncluded) ", Linux environment included" else "",
-                    )
-                },
-                { e ->
-                    CrashReporter.logNonFatal(getApplication(), "createBackup", e)
-                    _backupState.value = BackupUiState(busy = false, message = "Backup failed: ${e.message ?: e.javaClass.simpleName}")
-                },
-            )
-            refreshHomeFacts()
+            try {
+                val result = runCatching {
+                    ctx.contentResolver.openOutputStream(uri)?.use { out ->
+                        backup.createBackup(out, scopes) { p ->
+                            _backupState.value = _backupState.value.copy(progress = p)
+                        }
+                    } ?: throw IllegalStateException("could not open the selected location for writing")
+                }.getOrElse { Result.failure(it) }
+                result.fold(
+                    { m ->
+                        _backupState.value = BackupUiState(
+                            busy = false,
+                            message = "Backup created — projects: ${m.projectNames.size}, terminal sessions: ${m.terminalCount}" +
+                                if (m.rootfsIncluded) ", Linux environment included" else "",
+                        )
+                    },
+                    { e ->
+                        CrashReporter.logNonFatal(getApplication(), "createBackup", e)
+                        _backupState.value = BackupUiState(busy = false, message = "Backup failed: ${e.message ?: e.javaClass.simpleName}")
+                    },
+                )
+                refreshHomeFacts()
+            } finally {
+                PowerPolicy.opEnd(ctx)
+            }
         }
     }
 
@@ -587,33 +661,38 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun restoreBackup(uri: Uri, scopes: Set<BackupManager.Scope>, replaceProjects: Boolean) {
         viewModelScope.launch(Dispatchers.IO + bgGuard) {
             _backupState.value = BackupUiState(busy = true, progress = "preparing…")
-            val result = runCatching {
-                // Rootfs scope needs exclusive access to the environment.
-                if (BackupManager.Scope.ROOTFS in scopes) {
-                    _backupState.value = _backupState.value.copy(progress = "stopping services & sessions…")
-                    runCatching { services.shutdownAll() }
-                    runCatching { com.linuxify.app.terminal.TerminalSessionRegistry.stopEverythingAndRelease() }
-                }
-                ctx.contentResolver.openInputStream(uri)?.use { input ->
-                    backup.restore(input, BackupManager.RestoreOptions(scopes, replaceProjects)) { p ->
-                        _backupState.value = _backupState.value.copy(progress = p)
+            PowerPolicy.opBegin(ctx)
+            try {
+                val result = runCatching {
+                    // Rootfs scope needs exclusive access to the environment.
+                    if (BackupManager.Scope.ROOTFS in scopes) {
+                        _backupState.value = _backupState.value.copy(progress = "stopping services & sessions…")
+                        runCatching { services.shutdownAll() }
+                        runCatching { com.linuxify.app.terminal.TerminalSessionRegistry.stopEverythingAndRelease() }
                     }
-                } ?: throw IllegalStateException("could not open the selected file")
-            }.getOrElse { Result.failure(IllegalStateException("reader closed", it)) }
-            result.fold(
-                { summary ->
-                    // Terminal scope replaced the on-disk index — reload it so
-                    // the in-memory view matches (only possible because the
-                    // restore of terminal scope does not touch live sessions).
-                    runCatching { TerminalPersistence.loadFromDisk(ctx) }
-                    _backupState.value = BackupUiState(busy = false, message = summary)
-                },
-                { e ->
-                    CrashReporter.logNonFatal(getApplication(), "restoreBackup", e)
-                    _backupState.value = BackupUiState(busy = false, message = "Restore failed: ${e.message ?: e.javaClass.simpleName}")
-                },
-            )
-            refreshHomeFacts()
+                    ctx.contentResolver.openInputStream(uri)?.use { input ->
+                        backup.restore(input, BackupManager.RestoreOptions(scopes, replaceProjects)) { p ->
+                            _backupState.value = _backupState.value.copy(progress = p)
+                        }
+                    } ?: throw IllegalStateException("could not open the selected file")
+                }.getOrElse { Result.failure(IllegalStateException("reader closed", it)) }
+                result.fold(
+                    { summary ->
+                        // Terminal scope replaced the on-disk index — reload it so
+                        // the in-memory view matches (only possible because the
+                        // restore of terminal scope does not touch live sessions).
+                        runCatching { TerminalPersistence.loadFromDisk(ctx) }
+                        _backupState.value = BackupUiState(busy = false, message = summary)
+                    },
+                    { e ->
+                        CrashReporter.logNonFatal(getApplication(), "restoreBackup", e)
+                        _backupState.value = BackupUiState(busy = false, message = "Restore failed: ${e.message ?: e.javaClass.simpleName}")
+                    },
+                )
+                refreshHomeFacts()
+            } finally {
+                PowerPolicy.opEnd(ctx)
+            }
         }
     }
 

@@ -4,8 +4,10 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Keep the Linux userland alive in the background: foreground service with
-         a persistent notification (Termux's model), plus a partial wake lock so
-         Doze cannot freeze long downloads/servers once the screen turns off.
+         a persistent notification (Termux's model). The WAKE_LOCK permission
+         serves the conditional policy in PowerPolicy — the CPU is kept awake
+         only while a managed service runs, a download/install/apt/backup is in
+         flight, or the user opted in (Settings > Battery) with a live session.
          targetSdk 28: no FGS type and no runtime notification prompt required. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
