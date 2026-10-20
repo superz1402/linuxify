@@ -595,3 +595,21 @@ Work Log:
 
 Stage Summary:
 - fix/battery-saving @ 25ab729 pushed and ls-remote verified; SESSION_STATE.md updated on the branch. Pending: PR/merge to main, device drill (toggle, idle-shell drain, server liveness with screen off).
+
+---
+Task ID: landing-page-1
+Agent: Z.ai main agent
+Task: Build the standalone Linuxify landing page + APK release mirror in a new repo (Bilal140202/linuxify-app), link it from the main repo, update docs and worklogs.
+
+Work Log:
+- Built a fully static, no-build-step landing site (hand-written HTML/CSS/JS): terminal-native editorial design — Clash Display / Satoshi / JetBrains Mono, single #FF4D00 accent on #0B0B0C, hairline rules, numbered sections; GSAP + ScrollTrigger + Lenis motion with full prefers-reduced-motion fallbacks; boot-log preloader, typed hero/showcase terminals, expanding capability rows, spec download card with copyable SHA-256, FAQ accordion.
+- Pages: index (hero / what-it-is / 7 capabilities / terminal showcase / how-it-works / principles / download / FAQ), about (developer bio sourced from ansaribilal.com), privacy (v1.0), terms (v1.0), license & attributions (app GPL-3.0, vendored Termux/proot/libtalloc table, fonts), changelog (all 15 alpha releases, each linked to its official release), terminal-styled 404; sitemap.xml, robots.txt, .nojekyll, JSON-LD SoftwareApplication, custom OG image (1200x630, Playwright-rendered) + favicon + touch icon.
+- Every fact verified against this repo before writing: Ubuntu 24.04.5 LTS (noble), proot 5.1.107.96, termux-app v0.118.0 stack, minSdk 26, targetSdk 28 rationale, alpha.15 APK 12,568,978 B with SHA-256 bb40ef63...b34e4177, 144/144 tests. Honesty invariant enforced on-page: terminal mockups are labeled "Stylized recreation - not a screenshot".
+- Created repo Bilal140202/linuxify-app, pushed the site, enabled GitHub Pages (workflow build), created the mirrored release v0.1.0-alpha.15 with the byte-identical APK (checksum re-verified locally before upload) carrying verbatim release notes + provenance preamble.
+- QA before publish: local server render + Playwright screenshots (desktop 1440 / mobile 390) for hero, capabilities, download, privacy; internal-link sweep. Fixed two caught bugs: preloader curtain element sat outside its container (left a permanent black overlay) and the terminal typing loop never reset its start guard (no replay).
+- This repo: README gained a "Website & downloads" section and the status line now says alpha.15; repo homepage set to the live site; topics added (android, linux, proot, ubuntu, terminal, kotlin, jetpack-compose, termux).
+
+Stage Summary:
+- LIVE: https://bilal140202.github.io/linuxify-app/ — all 7 routes return 200, custom 404 active, APK download verified 200.
+- Mirror release: https://github.com/Bilal140202/linuxify-app/releases/tag/v0.1.0-alpha.15 (12,568,978 B, SHA-256 bb40ef63c643436f0527cf7e36ac9bbabe2813803b65b9f6dd1d03beb34e4177).
+- Production unchanged: releases still ship from this repo's cycle. Per-release mirror refresh procedure is documented in the site repo's AGENTS.md.

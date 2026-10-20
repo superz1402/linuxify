@@ -8,6 +8,18 @@ daemon, no Termux dependency, no remote server required.
 > Linuxify TypeScript CLI (Termux-based) lives at [Bilal140202/linuxify](https://github.com/Bilal140202/linuxify)
 > and remains the engineering reference for registry, doctor, and compatibility concepts.
 
+## Website & downloads
+
+The official landing page — features, terminal showcase, install guide, FAQ, privacy,
+terms, licenses, and full changelog — is live at
+**[bilal140202.github.io/linuxify-app](https://bilal140202.github.io/linuxify-app/)**.
+
+Its standalone source repository is [Bilal140202/linuxify-app](https://github.com/Bilal140202/linuxify-app)
+(site + release mirror only — no app code). The latest APK is mirrored there as a
+GitHub release (byte-identical, SHA-256 `bb40ef63c643436f0527cf7e36ac9bbabe2813803b65b9f6dd1d03beb34e4177`
+for v0.1.0-alpha.15); **the authoritative release cycle remains this repository** —
+see [Releases](https://github.com/superz1402/linuxify/releases).
+
 ## What it does
 
 - Installs a real **Ubuntu Linux userspace** locally using **proot** (unrooted, app-private) —
@@ -57,7 +69,9 @@ daemon, no Termux dependency, no remote server required.
 
 ## Status
 
-Early development (v0.1.0-alpha.14). See [worklog.md](worklog.md), [SESSION_STATE.md](SESSION_STATE.md),
+Early development (v0.1.0-alpha.15; latest published release — see
+[Releases](https://github.com/superz1402/linuxify/releases) and the mirrored
+download on the [landing page](https://bilal140202.github.io/linuxify-app/)). See [worklog.md](worklog.md), [SESSION_STATE.md](SESSION_STATE.md),
 [docs/CLI_PARITY.md](docs/CLI_PARITY.md) (full CLI ⇄ app feature audit) and the GitHub
 issue tracker for verified progress. What is claimed where is strictly separated into:
 **build-verified**, **host-verified**, **device-verified** — anything not labeled is not verified.

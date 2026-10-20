@@ -415,3 +415,23 @@ on branch fix/battery-saving @ 25ab729; origin/main = c8c7904).
 3. Known accepted limitations (documented, not bugs): software op state is
    in-memory only (process death clears the card; installed state re-probes on
    next visit); in-flight installs cannot be cancelled from the UI yet.
+
+## COMPLETED TASK — landing page & release mirror (2026-10-20, separate repo)
+
+- Standalone site repo: **Bilal140202/linuxify-app** — live at
+  https://bilal140202.github.io/linuxify-app/ (GitHub Pages, deployed by
+  Actions from the site repo's main branch). Design: terminal-native editorial
+  (Clash Display/Satoshi/JetBrains Mono, single accent, hairline rules), GSAP +
+  ScrollTrigger + Lenis with reduced-motion fallbacks, no build step, no
+  trackers.
+- Pages: index (hero/capabilities/showcase/how-it-works/principles/download/FAQ),
+  about, privacy, terms, license & attributions, changelog (all 15 alphas),
+  404. SEO: sitemap, robots, JSON-LD, OG image.
+- The site repo carries a MIRROR release: v0.1.0-alpha.15, byte-identical APK
+  (12,568,978 B; SHA-256 bb40ef63c643436f0527cf7e36ac9bbabe2813803b65b9f6dd1d03beb34e4177),
+  verbatim notes + provenance preamble. Production release cycle stays HERE.
+- Main README now links the site ("Website & downloads" section) and the status
+  line reflects alpha.15; this repo's homepage field points to the live site.
+- To mirror a future release: fetch APK from this repo's release, verify its
+  SHA-256, publish the same tag in Bilal140202/linuxify-app with the verbatim
+  notes, then bump version strings per that repo's AGENTS.md.
