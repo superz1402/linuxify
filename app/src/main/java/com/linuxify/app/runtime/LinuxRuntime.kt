@@ -18,8 +18,6 @@ class LinuxRuntime(private val ctx: Context) {
         val timedOut: Boolean,
     )
 
-    fun rootfsReady(): Boolean = RootfsInstaller(ctx).isReadyMarkerPresent()
-
     /**
      * proot argument vector for entering the userspace.
      *
@@ -248,13 +246,6 @@ class LinuxRuntime(private val ctx: Context) {
         if (!dir.canonicalFile.path.startsWith(canonicalRoot.path)) return emptyList()
         if (!dir.isDirectory) return emptyList()
         return dir.listFiles()?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() })) ?: emptyList()
-    }
-
-    fun relativePathOf(file: File): String? {
-        val rootfs = RuntimeDirs.rootfsDir(ctx).canonicalFile
-        val c = file.canonicalFile
-        if (!c.path.startsWith(rootfs.path)) return null
-        return c.path.removePrefix(rootfs.path).ifEmpty { "/" }
     }
 
     companion object {

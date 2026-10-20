@@ -87,10 +87,16 @@ class AptManager(private val ctx: Context) {
             }
     }
 
-    suspend fun isInstalled(pkg: String): Boolean = withContext(Dispatchers.IO) {
+    /**
+     * One exec for the whole installed universe — callers intersect locally.
+     * (Per-package dpkg -s checks would fork one proot process per package.)
+     */
+    suspend fun installedNames(): Set<String> = withContext(Dispatchers.IO) {
         val runtime = LinuxRuntime(ctx)
-        val res = runtime.boundedExec("dpkg -s ${Regex.escape(pkg)} 2>/dev/null | grep -q '^Status: install ok installed'", timeoutMs = 30_000)
-        res.exitCode == 0
+        val res = runtime.boundedExec("dpkg -l 2>/dev/null | awk '/^ii/ {print $2}'", timeoutMs = 60_000)
+        res.stdout.lines()
+            .map { it.trim().substringBefore(':') }  // strip :arch suffix
+            .filterTo(HashSet()) { it.isNotEmpty() }
     }
 
     suspend fun installedCount(): Int? = withContext(Dispatchers.IO) {

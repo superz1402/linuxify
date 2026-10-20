@@ -402,3 +402,31 @@ Work Log:
 Stage Summary:
 - Deliverable: linuxify v0.1.0-alpha.5 (release + debug APKs, stable signing, versionCode 5).
 - Next device drill: install alpha.5 over alpha.4 -> tap Terminal/Projects/Services. If any screen still fails, the app now shows the FULL stack trace in-app with a Copy button — paste it into the chat for a pinpoint fix.
+
+---
+Task ID: 10
+Agent: Z (main agent, continuation session)
+Task: Two-line request from the user: (a) clean up dead code in the main APK codebase, (b) add an option to close and clear terminal sessions when multiple sessions are running. Push and update worklogs.
+
+Work Log:
+- Recovered the workspace: 90 "modified" files were pure filemode noise (0 content diff) — set core.filemode=false, tree clean. Rebuilt the lost build env (Temurin JDK 21 at /home/z/toolchain/jdk21 + SDK platform-35/build-tools 35.0.0; foreground stepped installs — backgrounded processes get reaped between tool calls on this host).
+- Dead-code audit (cross-reference scanner over every declaration, main+test): verified and removed
+  * ui/theme/Tokens.kt — whole file (Spacing.*, Motion.*, extraKeyHeight, touchTarget: zero refs anywhere, no wildcard imports)
+  * Color.kt TerminalForeground; RuntimeMetadata DISTRO_ID + ROOTFS_VERSION_TAG
+  * LinuxRuntime rootfsReady() + relativePathOf(); ProjectsManager gitStatus(); ServiceManager saveDefinitions()
+  * Gradle deps: ui-tooling-preview + debug ui-tooling (zero @Preview in repo) + direct core-ktx (zero androidx.core imports; transitive via activity-compose)
+  * gradle.properties org.gradle.java.home — pinned old-host path broke this build; removed with rationale comment (JAVA_HOME per docs/BUILDING.md)
+- "Dead" that was actually UNFINISHED, wired instead of deleted: AptManager.isInstalled had zero callers and AppViewModel.removePackages was unreachable — Packages search results showed only Install although the screen copy promises removal. Replaced isInstalled with installedNames() (ONE dpkg -l exec, intersect locally — per-package checks would fork one proot process per hit) and wired Remove buttons: installed -> Remove, else Install, "…" while checking; onDone flips the state from the real Operation result.
+- Terminal session close/clear (TerminalScreen.kt):
+  * Per-tab ✕ inside the tab row (compact 6.dp-pad ✕; whole tab stays the switch target) + "CLOSE" extra key — works for 1..N sessions.
+  * Running sessions: AlertDialog confirm ("everything running inside it will be terminated") before SIGKILL; ended tabs close without confirm. Selection keeps a sane neighbor; empty list falls back to the existing "No sessions / Start shell" state.
+  * "CLR" extra key: ESC[H ESC[2J ESC[3J fed DIRECTLY into TerminalEmulator via append() — clears screen + xterm scrollback without touching the child's stdin, safe while vim/htop run. Verified the vendored emulator handles CSI 3J (TerminalEmulator.java case 'J').
+  * Hardening found while implementing: the natural `selected.coerceIn(0, sessions.size - 1)` throws IllegalArgumentException when the list is empty (ExtraKeysRow renders in the empty state) — guarded via focusedIndex(); confirm dialog no longer writes state during composition (Compose anti-pattern).
+- Build: default heap OOM-killed the Gradle daemon on this 4 GB host during release (daemon disappeared mid-mergeDex; an earlier "BUILD SUCCESSFUL" with stale Oct-18 outputs was partial state — caught by timestamp audit, full clean rebuild). Working recipe: --no-daemon + reduced heaps, variants split. BUILD SUCCESSFUL debug+release.
+- Verification: 37/37 unit tests (Checksum 3, NativeDepRepair 11, RootfsIntegrity 7, RuntimeMetadata 4, SafeTarExtractor 12); aapt: versionCode 6 / versionName 0.1.0-alpha.6; apksigner cert SHA-256 8f55e466… == alpha.5 (overwrite install, no uninstall); "Close shell" dialog + "Remove" strings confirmed inside classes.dex.
+- Docs: SESSION_STATE.md (alpha.6 entry, corrected build-env recipe incl. RAM note, de-staled Next actions); ARCHITECTURE.md terminal lifecycle note.
+
+Stage Summary:
+- Deliverable: linuxify v0.1.0-alpha.6 (release 12,442,706 B + debug 17,881,701 B; release is ~10 KB smaller than alpha.5 despite the feature — dropped tooling deps).
+- Terminal sessions can now be closed (explicit, confirmed) and cleared; dead code is gone; package removal is real UI instead of an unreachable code path.
+- Vendored Termux stack deliberately left untouched (upstream provenance for future merges; license notes).

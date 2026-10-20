@@ -19,6 +19,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,6 +38,10 @@ import com.linuxify.app.ui.theme.AppType
 /**
  * Real APT package management inside the Linux userspace. Live real output only;
  * a shared lock prevents concurrent conflicting apt operations.
+ *
+ * Search results know their installed state: installed packages offer "Remove",
+ * the rest offer "Install". The installed universe is fetched with ONE guest exec
+ * and intersected locally — never one dpkg process per search hit.
  */
 @Composable
 fun PackagesScreen(vm: AppViewModel) {
@@ -44,6 +49,16 @@ fun PackagesScreen(vm: AppViewModel) {
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<List<AptManager.SearchHit>>(emptyList()) }
     var searched by remember { mutableStateOf(false) }
+    var installedState by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
+
+    LaunchedEffect(results) {
+        if (results.isEmpty()) {
+            installedState = emptyMap()
+        } else {
+            val installed = runCatching { vm.apt.installedNames() }.getOrDefault(emptySet())
+            installedState = results.associate { it.name to (it.name in installed) }
+        }
+    }
 
     Column(
         Modifier
@@ -146,10 +161,25 @@ fun PackagesScreen(vm: AppViewModel) {
                     )
                 }
                 val running = op?.state == AptManager.Operation.State.RUNNING
-                TextButton(
-                    onClick = { vm.installPackages(hit.name) {} },
-                    enabled = !running,
-                ) { Text("Install") }
+                when (installedState[hit.name]) {
+                    null -> TextButton(onClick = {}, enabled = false) { Text("…") }
+                    true -> TextButton(
+                        onClick = {
+                            vm.removePackages(hit.name) { done ->
+                                installedState = installedState + (hit.name to (done.state != AptManager.Operation.State.DONE))
+                            }
+                        },
+                        enabled = !running,
+                    ) { Text("Remove") }
+                    false -> TextButton(
+                        onClick = {
+                            vm.installPackages(hit.name) { done ->
+                                installedState = installedState + (hit.name to (done.state == AptManager.Operation.State.DONE))
+                            }
+                        },
+                        enabled = !running,
+                    ) { Text("Install") }
+                }
             }
         }
 

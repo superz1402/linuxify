@@ -1,15 +1,21 @@
 package com.linuxify.app.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SecondaryScrollableTabRow
 import androidx.compose.material3.Surface
@@ -25,7 +31,10 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
@@ -43,6 +52,16 @@ import com.termux.view.TerminalView
 /**
  * Real PTY-backed terminal (vendored Termux TerminalView inside Compose).
  * Multiple sessions, extra-keys row, keyboard-aware resizing.
+ *
+ * Session lifecycle:
+ *  - "CLR" clears the visible screen AND the scrollback of the focused session
+ *    by feeding ESC[H ESC[2J ESC[3J straight into the emulator — it never
+ *    touches the child's stdin, so it is safe even while a TUI app is running.
+ *  - Closing a session (tab ✕ or "CLOSE" key) SIGKILLs the shell — everything
+ *    running inside that session dies with it, so running sessions get a
+ *    confirmation dialog first. Ended sessions close without confirmation.
+ *  - Navigating away from the screen still keeps processes alive by design
+ *    (master prompt §6.3) — closing a session is an explicit user action.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -69,6 +88,7 @@ fun TerminalScreen(vm: AppViewModel) {
     var spawnError by remember { mutableStateOf<String?>(null) }
 
     val sessionClient = remember { LinuxifySessionClient { refreshTick++ } }
+    var confirmCloseIndex by remember { mutableStateOf<Int?>(null) }
 
     fun spawnSession(initial: String? = null) {
         try {
@@ -81,6 +101,34 @@ fun TerminalScreen(vm: AppViewModel) {
             spawnError = t.message ?: t.javaClass.simpleName
         }
     }
+
+    /** SIGKILL the shell at [index] and remove its tab. Keep the selection sane. */
+    fun closeSession(index: Int, confirmed: Boolean = false) {
+        val s = sessions.getOrNull(index) ?: return
+        // A running shell holds live processes; an ended one is just a tab.
+        if (s.isRunning && !confirmed) {
+            confirmCloseIndex = index
+            return
+        }
+        s.finishIfRunning()
+        sessions.removeAt(index)
+        selected = when {
+            sessions.isEmpty() -> 0
+            index <= selected -> (selected - 1).coerceIn(0, sessions.size - 1)
+            else -> selected.coerceIn(0, sessions.size - 1)
+        }
+    }
+
+    /** Clear screen + scrollback of the focused session via the emulator itself. */
+    fun clearSession(index: Int) {
+        val emulator = sessions.getOrNull(index)?.emulator ?: return
+        emulator.append(CLEAR_SEQUENCE, CLEAR_SEQUENCE.size)
+        refreshTick++
+    }
+
+    /** Focused tab index, or null when no session exists (coerceIn(0, -1) throws). */
+    fun focusedIndex(): Int? =
+        if (sessions.isEmpty()) null else selected.coerceIn(0, sessions.size - 1)
 
     LaunchedEffect(Unit) {
         if (jniError == null && sessions.isEmpty()) spawnSession()
@@ -127,13 +175,59 @@ fun TerminalScreen(vm: AppViewModel) {
                         selected = i == selected,
                         onClick = { selected = i },
                         text = {
-                            Text(
-                                "sh ${i + 1}" + if (!s.isRunning) " (ended)" else "",
-                                style = AppType.MonoSmall,
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "sh ${i + 1}" + if (!s.isRunning) " (ended)" else "",
+                                    style = AppType.MonoSmall,
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                // Compact close affordance inside the tab; the whole
+                                // tab remains the primary (switch) touch target.
+                                Box(
+                                    Modifier
+                                        .clip(CircleShape)
+                                        .clickable { closeSession(i) }
+                                        .padding(6.dp),
+                                ) {
+                                    Text(
+                                        "\u2715",
+                                        style = AppType.MonoSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
                         },
                     )
                 }
+            }
+        }
+
+        confirmCloseIndex?.let { idx ->
+            // If the index went stale, render nothing — never write state during
+            // composition; the next explicit tap overwrites it anyway.
+            sessions.getOrNull(idx)?.let { target ->
+                AlertDialog(
+                    onDismissRequest = { confirmCloseIndex = null },
+                    title = { Text("Close shell ${idx + 1}?") },
+                    text = {
+                        Text(
+                            if (target.isRunning)
+                                "The shell and everything running inside it will be terminated. " +
+                                    "Background jobs started from this session will not survive."
+                            else
+                                "Remove this ended session from the tab list?",
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            closeSession(idx, confirmed = true)
+                            confirmCloseIndex = null
+                        }) { Text("Close") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { confirmCloseIndex = null }) { Text("Cancel") }
+                    },
+                )
             }
         }
 
@@ -185,11 +279,20 @@ fun TerminalScreen(vm: AppViewModel) {
                 ctrlDown = false
             },
             onNewSession = { spawnSession() },
+            onClear = { focusedIndex()?.let(::clearSession) },
+            onCloseCurrent = { focusedIndex()?.let { closeSession(it) } },
         )
             }
         }
     }
 }
+
+/** ESC[H (cursor home) + ESC[2J (erase display) + ESC[3J (drop scrollback). */
+private val CLEAR_SEQUENCE = byteArrayOf(
+    0x1b, '['.code.toByte(), 'H'.code.toByte(),
+    0x1b, '['.code.toByte(), '2'.code.toByte(), 'J'.code.toByte(),
+    0x1b, '['.code.toByte(), '3'.code.toByte(), 'J'.code.toByte(),
+)
 
 @Composable
 private fun ExtraKeysRow(
@@ -200,6 +303,8 @@ private fun ExtraKeysRow(
     onKey: (String, ByteArray) -> Unit,
     onCtrlC: () -> Unit,
     onNewSession: () -> Unit,
+    onClear: () -> Unit,
+    onCloseCurrent: () -> Unit,
 ) {
     Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
         Row(
@@ -222,15 +327,17 @@ private fun ExtraKeysRow(
             ExtraKey("PGUP") { onKey("pgup", byteArrayOf(0x1b, '['.code.toByte(), '5'.code.toByte(), '~'.code.toByte())) }
             ExtraKey("PGDN") { onKey("pgdn", byteArrayOf(0x1b, '['.code.toByte(), '6'.code.toByte(), '~'.code.toByte())) }
             ExtraKey("CTRL+C") { onCtrlC() }
+            ExtraKey("CLR") { onClear() }
             ExtraKey("+SH") { onNewSession() }
+            ExtraKey("CLOSE", tint = MaterialTheme.colorScheme.error) { onCloseCurrent() }
         }
     }
 }
 
 @Composable
-private fun ExtraKey(label: String, onTap: () -> Unit) {
+private fun ExtraKey(label: String, tint: Color = MaterialTheme.colorScheme.onSurface, onTap: () -> Unit) {
     TextButton(onClick = onTap, modifier = Modifier.height(36.dp)) {
-        Text(label, style = AppType.MonoSmall, color = MaterialTheme.colorScheme.onSurface)
+        Text(label, style = AppType.MonoSmall, color = tint)
     }
 }
 

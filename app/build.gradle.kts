@@ -41,8 +41,8 @@ android {
         // approach Termux, UserLAnd and every proot-based Android app uses.
         // compileSdk stays 35 so we keep modern toolchain/API availability.
         targetSdk = 28
-        versionCode = 5
-        versionName = "0.1.0-alpha.5"
+        versionCode = 6
+        versionName = "0.1.0-alpha.6"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -106,7 +106,6 @@ dependencies {
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
-    implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.9.3")
@@ -114,11 +113,9 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.compose.material3:material3-window-size-class")
-    implementation("androidx.core:core-ktx:1.15.0")
     implementation("org.apache.commons:commons-compress:1.26.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
-    debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
 }

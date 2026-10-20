@@ -72,15 +72,6 @@ class ServiceManager(private val ctx: Context) {
         }
     }
 
-    fun saveDefinitions(defs: List<ServiceDef>) {
-        val arr = JSONArray()
-        defs.forEach { d ->
-            arr.put(JSONObject().put("id", d.id).put("name", d.name).put("command", d.command)
-                .put("port", d.port ?: JSONObject.NULL))
-        }
-        defsFile.writeText(arr.toString())
-    }
-
     private fun defaultDefinitions(): List<ServiceDef> = listOf(
         ServiceDef("python-http", "Python HTTP server", "python3 -m http.server {port} --directory /root/projects", 8000),
     )

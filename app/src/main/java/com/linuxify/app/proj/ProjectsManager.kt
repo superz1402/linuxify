@@ -76,13 +76,6 @@ class ProjectsManager(private val ctx: Context) {
         }
     }
 
-    suspend fun gitStatus(project: Project): String? = withContext(Dispatchers.IO) {
-        if (project.gitBranch == null) return@withContext null
-        val runtime = LinuxRuntime(ctx)
-        val res = runtime.boundedExec("git status --short | head -20", timeoutMs = 30_000)
-        res.stdout.trim().ifEmpty { null }
-    }
-
     private suspend fun gitBranch(dir: File): String? = withContext(Dispatchers.IO) {
         val runtime = LinuxRuntime(ctx)
         val rel = dir.absolutePath.removePrefix(RuntimeDirs.projectsDir(ctx).absolutePath)

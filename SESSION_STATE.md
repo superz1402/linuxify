@@ -1,13 +1,14 @@
 # SESSION_STATE.md — Linuxify Android
 
-Concise handoff for the next agent session. Current as of 2026-10-18 (Task 9 complete — in-app crash reporting + non-fatal error surfaces; v0.1.0-alpha.5).
+Concise handoff for the next agent session. Current as of 2026-10-20 (Task 10 complete — terminal session close/clear + dead-code sweep + wired package removal; v0.1.0-alpha.6).
 
 ## Repository & branch
 
 - Canonical repo: https://github.com/superz1402/linuxify — branch `main`
 - Latest verified remote commit: see `git ls-remote origin main`
 - Releases:
-  - v0.1.0-alpha.5 (current) — crash can no longer be silent: global UncaughtExceptionHandler renders a copyable in-app report (plain-Android activity, :crashreport process); TerminalScreen pre-loads libtermux + guards session spawn; all ViewModel coroutines guarded; ready-gate verifies native binaries (stale marker -> auto-repair); assets: linuxify-0.1.0-alpha.5-release.apk + -debug.apk
+  - v0.1.0-alpha.6 (current) — terminal session lifecycle: per-tab ✕ + "CLOSE" extra key (SIGKILL with confirm dialog for running shells; ended tabs close silently), "CLR" extra key (clears screen + scrollback via emulator-side ESC[H ESC[2J ESC[3J, safe while TUI apps run); dead code removed (Tokens.kt, unused consts/fns/deps — see worklog Task 10); package removal wired into Packages search results (installed -> Remove, one dpkg -l exec per refresh); assets: linuxify-v0.1.0-alpha.6-release.apk + -debug.apk
+  - v0.1.0-alpha.5 — crash can no longer be silent: global UncaughtExceptionHandler renders a copyable in-app report (plain-Android activity, :crashreport process); TerminalScreen pre-loads libtermux + guards session spawn; all ViewModel coroutines guarded; ready-gate verifies native binaries (stale marker -> auto-repair); assets: linuxify-0.1.0-alpha.5-release.apk + -debug.apk
   - v0.1.0-alpha.4 (superseded; install works on device but Terminal/Projects/Services taps crashed with "app keeps stopping" — no trace available, hence the crash-report layer)
   - v0.1.0-alpha.3 (superseded; missing loader → device exec failures)
   - v0.1.0-alpha.2 (superseded; had the SafeTarExtractor `..`-symlink drop found on device)
@@ -47,11 +48,15 @@ Concise handoff for the next agent session. Current as of 2026-10-18 (Task 9 com
 
 ## Build environment (this server)
 
-- JDK: ~/toolchain/jdk-21.0.12.1+1 (Temurin, full JDK — system OpenJDK is JRE-only, no jlink)
+- JDK: /home/z/toolchain/jdk21 (Temurin 21.0.12.1, full JDK — system OpenJDK lacks jlink)
 - SDK: /home/z/android-sdk (platform-tools, android-35, build-tools 35.0.0)
 - Gradle wrapper 8.9 (project-committed); local.properties: sdk.dir=/home/z/android-sdk (ignored)
-- Rebuild: `export JAVA_HOME=~/toolchain/jdk-21.0.12.1+1 PATH="$JAVA_HOME/bin:$PATH" ANDROID_HOME=~/android-sdk && ./gradlew assembleDebug testDebugUnitTest`
-- RAM note: 4 GB host; assembleDebug fine; assembleRelease previously OOMs Gradle daemon → debug APK remains the shipped alpha artifact.
+- gradle.properties intentionally has NO org.gradle.java.home — pinned host paths in a
+  committed file break every other build host (bit us here; removed in alpha.6). Use JAVA_HOME.
+- RAM note: ~4 GB host; DEFAULT heap sizes OOM-kill the Gradle daemon during release
+  builds (daemon disappears mid-mergeDex). Build with reduced heaps, no daemon:
+  `export JAVA_HOME=/home/z/toolchain/jdk21 PATH="$JAVA_HOME/bin:$PATH" && ./gradlew assembleDebug assembleRelease test --no-daemon -Dorg.gradle.jvmargs="-Xmx1152m -XX:MaxMetaspaceSize=384m" -Pkotlin.daemon.jvmargs="-Xmx768m"`
+  (run assembleDebug and assembleRelease as separate invocations if the combined run OOMs).
 
 ## Known blockers
 
@@ -60,9 +65,10 @@ Concise handoff for the next agent session. Current as of 2026-10-18 (Task 9 com
 
 ## Next exact actions
 
-1. User installs v0.1.0-alpha.2 on device → Install flow should self-setup with no
-   error (preflight may create syslib shims transparently). Run the issue #3 drill:
-   shell → pwd/uname → create file → force-stop → relaunch → verify persistence.
+1. User installs v0.1.0-alpha.6 on device (overwrites alpha.5, same cert). Run the
+   issue #3 drill: shell -> pwd/uname -> create file -> force-stop -> relaunch -> verify
+   persistence. Also exercise the new session controls: +SH twice -> close one tab via ✕
+   (confirm dialog) -> CLR -> CLOSE.
 2. Close #3 with evidence. Then: OpenCode install profile; foreground service for
    servers; LAN bind option; theme-mode setting (docs/UI_RESEARCH.md spec §5).
 
