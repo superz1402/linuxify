@@ -27,6 +27,16 @@ object TerminalSessionRegistry {
 
     val sessions = java.util.concurrent.CopyOnWriteArrayList<TerminalSession>()
 
+    /** Guest workdir each session was spawned in — powers "Restart shell" on
+        ended tabs even after the session's process is gone. */
+    private val workdirs = java.util.concurrent.ConcurrentHashMap<TerminalSession, String>()
+
+    /** Sessions the USER closed (tab ✕ / dialog / teardown). A user close also
+        arrives as SIGKILL (-9), so the intent must be recorded BEFORE the kill
+        or the exit callback would report "killed by Android" falsely. */
+    private val userClosed: MutableSet<TerminalSession> =
+        java.util.Collections.newSetFromMap(java.util.IdentityHashMap())
+
     val client: LinuxifySessionClient by lazy { LinuxifySessionClient(LinuxifyApp.instance) }
 
     /**
@@ -37,11 +47,25 @@ object TerminalSessionRegistry {
      * history can offer "start a shell in the same directory".
      */
     fun add(ctx: Context, session: TerminalSession, workdir: String = "/root") {
+        workdirs[session] = workdir
         sessions.add(session)
         TerminalPersistence.register(ctx, session, workdir)
         // A live session exists — the process must survive backgrounding.
         RuntimeForegroundService.start(ctx)
     }
+
+    /** The guest directory [session] was spawned in, or null if unknown. */
+    fun workdirOf(session: TerminalSession): String? = workdirs[session]
+
+    /** Record that the USER (not the system) is closing [session]. Must be
+        called before the kill — the exit callback fires asynchronously. */
+    @Synchronized
+    fun markUserClosed(session: TerminalSession) {
+        userClosed.add(session)
+    }
+
+    @Synchronized
+    fun isUserClosed(session: TerminalSession): Boolean = userClosed.contains(session)
 
     fun hasLiveSessions(): Boolean = sessions.any { it.isRunning }
 
@@ -49,18 +73,25 @@ object TerminalSessionRegistry {
     fun remove(session: TerminalSession) {
         TerminalPersistence.forget(LinuxifyApp.instance, session)
         sessions.remove(session)
+        workdirs.remove(session)
+        synchronized(userClosed) { userClosed.remove(session) }
         RuntimeForegroundService.stopIfIdle(LinuxifyApp.instance)
     }
 
     fun stopEverythingAndRelease() {
         sessions.forEach { s ->
             runCatching {
+                // Teardown is a user/system-initiated shutdown, not a crash:
+                // mark FIRST so the async exit callbacks stay quiet.
+                markUserClosed(s)
                 val exit = try { if (s.isRunning) null else s.exitStatus } catch (_: Exception) { null }
-                TerminalPersistence.finalizeSession(LinuxifyApp.instance, s, exit)
+                TerminalPersistence.finalizeSession(LinuxifyApp.instance, s, exit, "closed by you")
                 s.finishIfRunning()
             }
         }
         sessions.clear()
+        workdirs.clear()
+        synchronized(userClosed) { userClosed.clear() }
         RuntimeForegroundService.stopIfIdle(LinuxifyApp.instance)
     }
 }
@@ -107,13 +138,26 @@ class LinuxifySessionClient(private val context: Context) : TerminalSessionClien
         } catch (_: Exception) {
             -1
         }
-        // Persistence (issue #23): final transcript snapshot + record close.
-        TerminalPersistence.finalizeSession(context, finishedSession, code)
-        RuntimeNotifier.runCompleted(
-            context,
-            title = "Run completed — $label ended",
-            text = "Exit code $code. Tap to open Linuxify.",
-        )
+        // The honest cause (alpha.20): user closes stay quiet; a signal 9 from
+        // the system is reported AS a system kill, not a mysterious "ended".
+        val closedByUser = TerminalSessionRegistry.isUserClosed(finishedSession)
+        val kind = if (closedByUser) {
+            SessionEndCause.Kind.USER_CLOSED
+        } else {
+            SessionEndCause.classify(code)
+        }
+        val cause = SessionEndCause.shortLabel(kind, code)
+        // Persistence (issue #23): final transcript snapshot + record close,
+        // now carrying the human-readable cause into terminal history.
+        TerminalPersistence.finalizeSession(context, finishedSession, code, cause)
+        // Notifications only for ends the user did NOT cause, and only in the
+        // background — on screen, the tab label + banner already tell the story.
+        if (!closedByUser && !LinuxifyApp.isInForeground) {
+            val (title, text) = SessionEndCause.notification(kind, code, label)
+            if (title.isNotEmpty()) {
+                RuntimeNotifier.runCompleted(context, title = title, text = text)
+            }
+        }
         // Release the keep-alive if this was the last live work. Ended sessions
         // stay in the list so the user can still read their output.
         RuntimeForegroundService.stopIfIdle(context)
