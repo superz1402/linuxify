@@ -689,3 +689,29 @@ Work Log:
 Stage Summary:
 - Sessions that die now say WHO killed them (banner + notification + history), user closes are quiet, and the REAL fix on device is one tap away (Settings → Session stability / banner → Why / fixes).
 - Honest limits: an app cannot exempt its child processes from the phantom killer via public API — the per-version device settings are the fix; the app's job (cause honesty + recovery + guidance) is done. Device drill recorded in SESSION_STATE.
+
+---
+Task ID: terminal-hardening-1
+Agent: Z (main agent, continuation session)
+Task: User ask — "go through the terminal codes thoroughly: leaks, broken or damaged code making the system bad; make the terminal work better." Full-stack audit + fixes, push, release.
+
+Work Log:
+- STALE-CLONE RULE APPLIED FIRST (third time's the charm): fetched + diffed HEAD..origin/main before writing a line; local tree showed 90 phantom "modified" files = filemode noise (core.filemode now false, reset to origin/main @ 07f00f2, alpha.20).
+- AUDIT: vendored Termux files diffed byte-for-byte against upstream v0.118.0 — engine PRISTINE (only deltas = alpha.7's documented textselection fixes); every integration file read end-to-end (PtyTerminal, TerminalSessionRegistry, TerminalPersistence, TerminalScreen, RuntimeForegroundService, PowerPolicy, AppViewModel, MainActivity, LinuxifyApp, CrashReporter, RuntimeNotifier); leak sweep (registerReceiver, static Context/View, stray Handler/Thread) — clean; upstream master diffed for backportable fixes (grapheme rewrite correctly rejected as API-breaking).
+- 7 REAL DEFECTS found + fixed (all in the wiring, none in the vendored engine):
+  1. kill(0) APP-SUICIDE: finishIfRunning() on a never-laid-out session (pid 0, isRunning()==true) = SIGKILL to the caller's whole process group = the app dies. Guarded mShellPid > 0.
+  2. EXIT OUTPUT LOSS: MSG_PROCESS_EXITED read one 4 KB slice then closed the queues; now drains everything in flight (bounded) before cleanup.
+  3. ByteQueue close-drops-data: closed queue now delivers stored bytes then EOF (6 new tests).
+  4. CLOSE-DIALOG TEXT: Kotlin precedence truncated the whole warning when exactly 1 process ran ("1 process is"); extracted to pure SessionCloseCopy + 3 tests.
+  5. TEARDOWN ORPHANS: stopEverythingAndRelease SIGKILLed only the proot tracer; now ProcTree.killTreeBestEffort (whole tree) — rootfs restore no longer races old-rootfs processes.
+  6. MAIN-THREAD DISK I/O: TerminalPersistence register/finalize/flushAll wrote to flash on the caller (main) thread; now one serial background writer, ordering preserved, skip-hash only after successful write.
+  7. NPE GUARDS (upstream master backport): middle-click paste zero-item clip; autofill before attachSession.
+  + userClosed: IdentityHashMap (mutated under 2 different monitors) → ConcurrentHashMap.newKeySet (identity semantics preserved); output ring 4 KB → 64 KB (master's size).
+- Build env re-provisioned on this host (was reset): Temurin JDK 21 (jlink present this time — system java IS 21) + SDK platform-35/build-tools 35.0.0; RAM discipline as documented (--no-daemon, 1152m/768m).
+- Verification: 184/184 unit tests (+9 new); assembleDebug+Release SUCCESS; aapt versionCode 21 / 0.1.0-alpha.21; apksigner cert 8f55e466… unchanged → overwrite install.
+- Shipped: PR #27 squash-merged (main = a8d3678); release v0.1.0-alpha.21 with release + debug APKs; local copies in download/.
+
+Stage Summary:
+- The terminal's engine was never the problem — every real defect lived in the integration wiring around it, and all 7 are now fixed with tests pinning the semantics that used to be implicit (queue close behavior, dialog copy).
+- Device drill for the user: apt-install-final-lines visible; "1 process" dialog text complete; idle close instant; no backgrounding jank mid-output.
+- Standing rule honored: fetch+diff BEFORE implementing; filemode noise identified via 0-insertion diff stat before any destructive action.

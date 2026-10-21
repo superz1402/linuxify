@@ -1,9 +1,71 @@
 # SESSION_STATE.md — Linuxify Android
 
 Concise handoff for the next agent session. Current as of 2026-10-21 (Task
-signal9-1 — honest session-end causes: signal 9 = Android's phantom process
-killer, ended-session banner + restart + per-version fixes, quiet user closes;
-v0.1.0-alpha.20, main = 4ef04b4).
+terminal-hardening-1 — full-stack terminal audit: 7 real defects fixed
+(app-self-kill via kill(0), output loss at exit, main-thread persistence I/O,
+dialog text bug, orphaned teardown, NPE guards, concurrent-set correctness);
+v0.1.0-alpha.21, main = a8d3678).
+
+## COMPLETED TASK — deep terminal-stack hardening audit (alpha.21)
+
+- USER ASK: "go through the terminal codes thoroughly — leaks, broken or
+  damaged code making the system bad; make the terminal work better."
+- AUDIT METHOD: every vendored Termux file diffed byte-for-byte against
+  upstream v0.118.0 (result: pristine engine; only deltas = the two documented
+  alpha.7 fixes in textselection) + full read of every integration file
+  (PtyTerminal, Registry, Persistence, Screen, FGS, PowerPolicy, AppViewModel,
+  MainActivity, LinuxifyApp, CrashReporter) + leak-pattern sweep (receivers,
+  statics, handlers, threads — clean) + upstream master diff for backportables.
+- FIX 1 (worst): `TerminalSession.finishIfRunning()` on a session constructed
+  but never laid out (mShellPid == 0, isRunning()==true) sent SIGKILL to pid 0
+  = POSIX "kill the CALLER's whole process group" = the APP ITSELF dies.
+  Now guarded `mShellPid > 0` (matches `write()`'s existing guard).
+- FIX 2: MSG_PROCESS_EXITED read ONE 4 KB slice then cleanupResources() closed
+  the queues — the tail of a command's output (apt's last lines, a script's
+  dying error) was silently dropped at exactly the moment it matters. Now
+  drains everything in flight (bounded 32 x 4 KB loop) BEFORE cleanup.
+- FIX 3: ByteQueue.read() returned EOF on a closed queue even with stored
+  bytes — close() now means "no NEW data", not "discard buffered output"
+  (6 new ByteQueueTest cases pin: deliver-then-EOF, ring-wrap drain, blocked
+  reader/writer wake-on-close).
+- FIX 4: TerminalScreen close-confirm text had a Kotlin precedence bug —
+  `"... process" + if (n == 1) " is" else "es are" + rest` bound the WHOLE
+  warning into the else branch → exactly 1 running process (the common case:
+  one `top`) showed a truncated "1 process is". Extracted to pure
+  terminal/SessionCloseCopy.confirmBody() + 3 tests.
+- FIX 5: TerminalSessionRegistry.stopEverythingAndRelease killed only the
+  proot tracer (finishIfRunning) → guest shell + jobs orphaned during rootfs
+  restore/teardown, still running from the OLD rootfs while files are
+  replaced. Now ProcTree.killTreeBestEffort (same policy as tab close).
+- FIX 6: TerminalPersistence did ALL disk writes on the caller's thread —
+  main thread in the 3 paths that matter (spawn register, finalize at session
+  end = up to a few hundred KB flash I/O, ON_STOP flushAll). Now one serial
+  background writer (Dispatchers.IO.limitedParallelism(1)): enqueue order
+  preserved (final snapshot beats a later delete), tmp+rename never
+  interleaves, callers return instantly, skip-hash recorded only AFTER a
+  successful write (failed writes retry on the next sweep).
+- FIX 7: TerminalView NPE guards backported from upstream master: middle-click
+  paste with a zero-item clip (getItemAt(0) null) and autofill() before
+  attachSession.
+- ALSO: userClosed set switched IdentityHashMap → ConcurrentHashMap.newKeySet
+  (the old one was mutated under TWO different monitors — @Synchronized on the
+  registry object in mark/isUserClosed vs synchronized(userClosed) in
+  remove/clear: unsynchronized cross-thread add/remove was possible, and
+  IdentityHashMap corrupts under concurrent mutation; TerminalSession has
+  identity equals so CHM.newKeySet IS an identity set). Output ring 4 KB →
+  64 KB (upstream master's size): heavy output no longer stalls the child
+  every 4 KB across busy main-thread frames.
+- VERIFY: 184/184 unit tests (+9 new: 6 ByteQueue + 3 SessionCloseCopy);
+  assembleDebug+Release OK; aapt versionCode 21 / 0.1.0-alpha.21; apksigner
+  cert 8f55e466… unchanged → overwrite install.
+- DEVICE DRILL: (1) `apt install htop`, let it finish → last lines present in
+  transcript; (2) `top` → ✕ → dialog reads "1 process is still running…" with
+  the full warning; (3) idle shell ✕ → instant close (unchanged); (4) `cat`
+  a big file, background mid-output → no jank spike, return → intact.
+- HONEST LIMITS: engine still upstream v0.118.0 — master's grapheme/emoji
+  renderer rewrite is an API-breaking migration, deliberately NOT backported
+  wholesale; the exit-drain and queue-size improvements are ours (upstream
+  master still has the 4 KB exit loss).
 
 ## COMPLETED TASK — "shell ends for no reason" = Android kills it (alpha.20)
 
