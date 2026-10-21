@@ -25,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.linuxify.app.backup.BackupManager
@@ -32,6 +33,7 @@ import com.linuxify.app.maintenance.MaintenanceManager
 import com.linuxify.app.runtime.LinuxRuntime
 import com.linuxify.app.runtime.PowerPolicy
 import com.linuxify.app.runtime.RuntimeDirs
+import com.linuxify.app.terminal.SessionEndCause
 import com.linuxify.app.ui.AppViewModel
 import com.linuxify.app.ui.components.FactRow
 import com.linuxify.app.ui.theme.AppType
@@ -149,6 +151,47 @@ fun SettingsScreen(vm: AppViewModel) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+        }
+
+        // alpha.20: honest guidance for the #1 "is the app broken?" report —
+        // shells that die on their own are Android's phantom process killer,
+        // not a crash. The fix is a device setting, so surface it here too.
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Session stability", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "If shells ever end on their own — the tab flips to \"(ended)\" and the transcript shows " +
+                        "[Process completed (signal 9)] — Android killed the shell, not a Linuxify crash. On Android 12+ " +
+                        "the system silently ends apps' background child processes (\"phantom process killer\") once about " +
+                        "32 exist system-wide, or when one uses heavy CPU while the app is backgrounded; low memory and " +
+                        "OEM battery managers kill the same way.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "The fixes, per Android version:",
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Text(SessionEndCause.FIX_ANDROID_14_PLUS, style = MaterialTheme.typography.bodySmall)
+                Text(
+                    SessionEndCause.FIX_ANDROID_13,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                )
+                Text(
+                    SessionEndCause.FIX_ANDROID_12,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                )
+                Text(SessionEndCause.FIX_GENERAL, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                OutlinedButton(onClick = {
+                    val cm = appCtx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                    cm?.setPrimaryClip(
+                        android.content.ClipData.newPlainText("linuxify-phantom-fix", SessionEndCause.ADB_FIX_COMMANDS),
+                    )
+                    android.widget.Toast.makeText(appCtx, "ADB commands copied", android.widget.Toast.LENGTH_SHORT).show()
+                }) { Text("Copy ADB fix commands") }
             }
         }
 

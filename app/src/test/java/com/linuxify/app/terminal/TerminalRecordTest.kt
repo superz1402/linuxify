@@ -19,6 +19,7 @@ class TerminalRecordTest {
             startedMs = 1_760_000_000_000L,
             endedMs = 1_760_000_060_000L,
             exitCode = 0,
+            endCause = "clean exit",
         )
         val parsed = TerminalPersistence.recordFromJson(TerminalPersistence.recordToJson(rec))
         assertEquals(rec, parsed)
@@ -31,9 +32,11 @@ class TerminalRecordTest {
         val json = TerminalPersistence.recordToJson(rec)
         assertTrue(json.isNull("ended"))
         assertTrue(json.isNull("exit"))
+        assertTrue(json.isNull("cause"))
         val parsed = TerminalPersistence.recordFromJson(json)!!
         assertNull(parsed.endedMs)
         assertNull(parsed.exitCode)
+        assertNull(parsed.endCause)
         assertEquals(rec, parsed)
     }
 
@@ -45,6 +48,17 @@ class TerminalRecordTest {
         )
         val parsed = TerminalPersistence.parseIndex(TerminalPersistence.indexJson(records))
         assertEquals(records, parsed)
+    }
+
+    @Test
+    fun `old index without cause field parses with null endCause`() {
+        // Backward compatibility: an alpha.19 index (no "cause" key) must load
+        // cleanly — the label falls back to the raw exit rendering in the UI.
+        val legacy = """{"format":1,"records":[{"id":"old","workdir":"/root","started":1,"ended":2,"exit":-9}]}"""
+        val parsed = TerminalPersistence.parseIndex(legacy)
+        assertEquals(1, parsed.size)
+        assertNull(parsed[0].endCause)
+        assertEquals(-9, parsed[0].exitCode)
     }
 
     @Test

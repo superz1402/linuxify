@@ -65,6 +65,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.linuxify.app.R
 import com.linuxify.app.terminal.ProcTree
 import com.linuxify.app.terminal.PtyTerminal
+import com.linuxify.app.terminal.SessionEndCause
 import com.linuxify.app.terminal.TerminalPersistence
 import com.linuxify.app.terminal.TerminalSessionRegistry
 import com.linuxify.app.terminal.TerminalLogShare
@@ -194,6 +195,10 @@ fun TerminalScreen(vm: AppViewModel) {
         // (transcript survives in history), drops the tab and releases the
         // foreground keep-alive when nothing else is live.
         closeScope.launch {
+            // Mark the close as USER-initiated BEFORE the kill: the exit
+            // callback arrives asynchronously as SIGKILL (-9) and must not be
+            // reported as "killed by Android" (alpha.20 honest-cause work).
+            TerminalSessionRegistry.markUserClosed(s)
             if (s.isRunning) {
                 withContext(Dispatchers.IO) { ProcTree.killTreeBestEffort(s.getPid()) }
             }
@@ -376,11 +381,28 @@ fun TerminalScreen(vm: AppViewModel) {
                     val safeIndex = selected.coerceIn(0, sessions.size - 1)
                     val session = sessions[safeIndex]
 
-                    Box(
-                        Modifier
-                            .weight(1f)
-                            .fillMaxWidth(),
-                    ) {
+                    Column(Modifier.weight(1f).fillMaxWidth()) {
+                        // Ended-session banner (alpha.20): when the focused
+                        // shell was killed (signal 9 = Android's phantom
+                        // process killer / low memory) or crashed, SAY so —
+                        // with a one-tap restart and the per-version fixes —
+                        // instead of a bare "(ended)" tab. refreshTick is read
+                        // to subscribe: the isRunning flip must recompose this.
+                        val endTick = refreshTick
+                        if (endTick >= 0 && !session.isRunning) {
+                            EndedSessionBanner(
+                                exitStatus = try {
+                                    session.exitStatus
+                                } catch (_: Exception) {
+                                    -1
+                                },
+                                workdir = TerminalSessionRegistry.workdirOf(session) ?: "/root",
+                                onRestart = {
+                                    spawnSession(workdir = TerminalSessionRegistry.workdirOf(session) ?: "/root")
+                                },
+                            )
+                        }
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
                         AndroidView(
                             factory = { ctx ->
                                 TerminalView(ctx, null).apply {
@@ -426,6 +448,7 @@ fun TerminalScreen(vm: AppViewModel) {
                                 .padding(10.dp),
                             onTap = { shareTranscript(context, session, "sh ${safeIndex + 1}") },
                         )
+                    }
                     }
                     }
                 }
@@ -610,6 +633,99 @@ private fun SessionTabs(
 }
 
 /**
+ * Banner pinned above the terminal when the focused session ended on its own
+ * (alpha.20). The vendored emulator already prints "[Process completed
+ * (signal 9) - press Enter]" into the scrollback; this tells the user WHO
+ * killed the shell and what to do about it, instead of a bare "(ended)" tab.
+ */
+@Composable
+private fun EndedSessionBanner(
+    exitStatus: Int,
+    workdir: String,
+    onRestart: () -> Unit,
+) {
+    val kind = SessionEndCause.classify(exitStatus)
+    var showFixes by remember { mutableStateOf(false) }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF1C0B0B))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            SessionEndCause.shortLabel(kind, exitStatus),
+            style = MaterialTheme.typography.labelLarge,
+            fontFamily = FontFamily.Monospace,
+            color = if (kind == SessionEndCause.Kind.CLEAN_EXIT) TermuxKeyForeground else Color(0xFFFF8A80),
+        )
+        Text(
+            SessionEndCause.explanation(kind, exitStatus),
+            style = MaterialTheme.typography.bodySmall,
+            color = TermuxForeground.copy(alpha = 0.72f),
+        )
+        Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            TextButton(onClick = onRestart) {
+                Text(if (workdir != "/root") "Restart shell in $workdir" else "Restart shell")
+            }
+            if (kind == SessionEndCause.Kind.KILLED_BY_ANDROID || kind == SessionEndCause.Kind.GUEST_CRASH) {
+                TextButton(onClick = { showFixes = true }) { Text("Why / fixes") }
+            }
+        }
+    }
+    if (showFixes) {
+        SessionEndFixesDialog(onDismiss = { showFixes = false })
+    }
+}
+
+/**
+ * The honest explainer for externally killed sessions + the per-version fixes,
+ * with one-tap copy of the ADB commands (Android 12/13 have no user-facing
+ * toggle — the same mitigation Termux documents for its users).
+ */
+@Composable
+private fun SessionEndFixesDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Why do shells end on their own?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Android itself killed the shell — Linuxify and the Linux environment did not crash. On Android 12+ " +
+                        "the system silently ends apps' background child processes (the \"phantom process killer\") once " +
+                        "about 32 exist system-wide, or when one uses heavy CPU while the app is backgrounded. Low " +
+                        "memory and OEM battery managers kill the same way.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(SessionEndCause.FIX_ANDROID_14_PLUS, style = MaterialTheme.typography.bodySmall)
+                Text(
+                    SessionEndCause.FIX_ANDROID_13,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                )
+                Text(
+                    SessionEndCause.FIX_ANDROID_12,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                )
+                Text(SessionEndCause.FIX_GENERAL, style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                cm?.setPrimaryClip(
+                    android.content.ClipData.newPlainText("linuxify-phantom-fix", SessionEndCause.ADB_FIX_COMMANDS),
+                )
+                Toast.makeText(context, "ADB commands copied", Toast.LENGTH_SHORT).show()
+            }) { Text("Copy ADB commands") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
+/**
  * Read-only transcript pane for a session from a previous run (issue #23).
  * Loads the log lazily (tail-capped at [HISTORY_TAIL_BYTES] — a long-running
  * session's log can grow large); shows the session metadata and offers a new
@@ -647,7 +763,9 @@ private fun HistoryPane(
                     timeFmt.format(Date(record.startedMs)),
                     record.workdir.takeIf { it != "/root" },
                     when {
-                        record.isFinished -> "ended (exit ${record.exitCode ?: "unknown"})"
+                        // alpha.20: the persisted human cause ("killed by Android
+                        // (signal 9)") replaces the raw "ended (exit -9)" when known.
+                        record.isFinished -> record.endCause ?: "ended (exit ${record.exitCode ?: "unknown"})"
                         else -> "interrupted"
                     },
                 ).joinToString("  ·  "),

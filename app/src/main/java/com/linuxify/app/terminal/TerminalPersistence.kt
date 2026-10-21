@@ -52,6 +52,7 @@ object TerminalPersistence {
         val startedMs: Long,
         val endedMs: Long? = null,
         val exitCode: Int? = null,
+        val endCause: String? = null,
     ) {
         val isFinished: Boolean get() = endedMs != null
     }
@@ -63,6 +64,12 @@ object TerminalPersistence {
 
     /** Live sessions -> their record id (finished sessions are removed). */
     private val liveIds = ConcurrentHashMap<TerminalSession, String>()
+
+    /** Sessions registered in THIS process -> record id. Kept after finalize so
+        the async exit callback (onSessionFinished) can still write the real
+        exit code + cause when the tab was closed in the same instant the
+        process died — the earlier finalize gets upgraded instead of lost. */
+    private val knownIds = ConcurrentHashMap<TerminalSession, String>()
 
     /** Sessions whose transcript changed since the last snapshot. */
     private val dirty = ConcurrentHashMap.newKeySet<TerminalSession>()
@@ -87,6 +94,7 @@ object TerminalPersistence {
             startedMs = System.currentTimeMillis(),
         )
         liveIds[session] = rec.id
+        knownIds[session] = rec.id
         synchronized(records) { records[rec.id] = rec }
         dirty.add(session)
         runCatching { logFile(ctx, rec.id).writeText("") }
@@ -122,15 +130,24 @@ object TerminalPersistence {
     }
 
     /**
-     * Final snapshot + index update when a session exits. Idempotent: a
-     * record can only be finalized once.
+     * Final snapshot + index update when a session exits. Idempotent AND
+     * upgradable: the first call stamps the end time; a later call with the
+     * real exit code/cause (the async onSessionFinished after a tab close)
+     * fills them in without resetting the timestamp.
      */
-    fun finalizeSession(ctx: Context, session: TerminalSession, exitCode: Int?) {
-        val id = liveIds.remove(session) ?: return
+    fun finalizeSession(ctx: Context, session: TerminalSession, exitCode: Int?, cause: String? = null) {
+        val id = knownIds[session] ?: return
+        liveIds.remove(session)
         dirty.remove(session)
         snapshot(ctx, session, id)
         synchronized(records) {
-            records[id]?.let { records[id] = it.copy(endedMs = System.currentTimeMillis(), exitCode = exitCode) }
+            records[id]?.let {
+                records[id] = it.copy(
+                    endedMs = it.endedMs ?: System.currentTimeMillis(),
+                    exitCode = exitCode ?: it.exitCode,
+                    endCause = cause ?: it.endCause,
+                )
+            }
         }
         writeIndex(ctx)
     }
@@ -157,6 +174,7 @@ object TerminalPersistence {
      */
     fun loadFromDisk(ctx: Context) {
         synchronized(records) { records.clear() }
+        knownIds.clear()
         lastSnapshot.clear()
         val f = indexFile(ctx)
         if (!f.isFile) return
@@ -172,7 +190,10 @@ object TerminalPersistence {
         if (liveIds.containsValue(id)) return false
         val removed = synchronized(records) { records.remove(id) } != null
         logFile(ctx, id).delete()
-        if (removed) writeIndex(ctx)
+        if (removed) {
+            knownIds.values.removeAll { it == id }
+            writeIndex(ctx)
+        }
         return removed
     }
 
@@ -185,7 +206,10 @@ object TerminalPersistence {
             d
         }
         doomed.forEach { logFile(ctx, it).delete() }
-        if (doomed.isNotEmpty()) writeIndex(ctx)
+        if (doomed.isNotEmpty()) {
+            knownIds.values.removeAll { it in doomed }
+            writeIndex(ctx)
+        }
         return doomed.size
     }
 
@@ -244,6 +268,7 @@ object TerminalPersistence {
         .put("started", r.startedMs)
         .put("ended", r.endedMs ?: JSONObject.NULL)
         .put("exit", r.exitCode ?: JSONObject.NULL)
+        .put("cause", r.endCause ?: JSONObject.NULL)
 
     fun recordFromJson(o: JSONObject): Record? {
         val id = o.optString("id").takeIf { it.isNotEmpty() } ?: return null
@@ -253,6 +278,7 @@ object TerminalPersistence {
             startedMs = o.optLong("started", 0L),
             endedMs = if (o.isNull("ended")) null else o.optLong("ended"),
             exitCode = if (o.isNull("exit")) null else o.optInt("exit"),
+            endCause = o.optString("cause").takeIf { it.isNotEmpty() },
         )
     }
 
