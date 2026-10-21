@@ -33,9 +33,13 @@ object TerminalSessionRegistry {
 
     /** Sessions the USER closed (tab ✕ / dialog / teardown). A user close also
         arrives as SIGKILL (-9), so the intent must be recorded BEFORE the kill
-        or the exit callback would report "killed by Android" falsely. */
-    private val userClosed: MutableSet<TerminalSession> =
-        java.util.Collections.newSetFromMap(java.util.IdentityHashMap())
+        or the exit callback would report "killed by Android" falsely.
+        Backed by ConcurrentHashMap for real thread safety: TerminalSession has
+        identity equals/hashCode, so this IS an identity set — and unlike the
+        previous IdentityHashMap-based set it is safe under the unsynchronized
+        cross-thread mark/isUserClosed/remove interleavings that actually occur
+        (exit callback fires on main while a teardown loop may run elsewhere). */
+    private val userClosed: MutableSet<TerminalSession> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     val client: LinuxifySessionClient by lazy { LinuxifySessionClient(LinuxifyApp.instance) }
 
@@ -74,7 +78,7 @@ object TerminalSessionRegistry {
         TerminalPersistence.forget(LinuxifyApp.instance, session)
         sessions.remove(session)
         workdirs.remove(session)
-        synchronized(userClosed) { userClosed.remove(session) }
+        userClosed.remove(session)
         RuntimeForegroundService.stopIfIdle(LinuxifyApp.instance)
     }
 
@@ -85,13 +89,20 @@ object TerminalSessionRegistry {
                 // mark FIRST so the async exit callbacks stay quiet.
                 markUserClosed(s)
                 val exit = try { if (s.isRunning) null else s.exitStatus } catch (_: Exception) { null }
+                // Kill the WHOLE tree (proot tracer + guest shell + its jobs), not
+                // just the tracer: SIGKILL to proot alone orphans the guest shell
+                // and background jobs — during a rootfs restore they would keep
+                // running from the OLD rootfs while the files are replaced.
+                if (s.isRunning) {
+                    ProcTree.killTreeBestEffort(s.getPid())
+                }
                 TerminalPersistence.finalizeSession(LinuxifyApp.instance, s, exit, "closed by you")
                 s.finishIfRunning()
             }
         }
         sessions.clear()
         workdirs.clear()
-        synchronized(userClosed) { userClosed.clear() }
+        userClosed.clear()
         RuntimeForegroundService.stopIfIdle(LinuxifyApp.instance)
     }
 }
