@@ -29,6 +29,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.width
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
@@ -45,6 +46,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,6 +63,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.linuxify.app.R
+import com.linuxify.app.terminal.ProcTree
 import com.linuxify.app.terminal.PtyTerminal
 import com.linuxify.app.terminal.TerminalPersistence
 import com.linuxify.app.terminal.TerminalSessionRegistry
@@ -101,11 +104,14 @@ import kotlin.math.roundToInt
  *    is wiped until the user deletes it. Each history tab offers "New shell
  *    in this directory" and a delete action.
  *  - Close & clear: every live tab carries a ✕ (and the tab row a CLR key).
- *    Closing a RUNNING shell asks first — everything inside it dies with it —
- *    then SIGKILLs it and finalizes its on-disk record (the transcript stays
- *    in history; only the tab goes). CLR clears screen + scrollback of the
- *    focused session by feeding ESC[H ESC[2J ESC[3J straight into the
- *    emulator — never the child's stdin, so it is safe while TUI apps run.
+ *    Closing is SMART: an ended tab closes silently; an IDLE shell (nothing
+ *    running under it) closes instantly with no prompt; only a shell with
+ *    live work asks once, naming the process count — then the whole tree
+ *    (proot, guest, jobs) is SIGKILLed and the on-disk record finalized (the
+ *    transcript stays in history; only the tab goes). CLR clears screen +
+ *    scrollback of the focused session by feeding ESC[H ESC[2J ESC[3J
+ *    straight into the emulator — never the child's stdin, so it is safe
+ *    while TUI apps run.
  */
 @Composable
 fun TerminalScreen(vm: AppViewModel) {
@@ -169,29 +175,66 @@ fun TerminalScreen(vm: AppViewModel) {
     // indices shift as tabs open/close; the session object does not.
     var confirmClose by remember { mutableStateOf<TerminalSession?>(null) }
 
+    // Smart close (user request: "even with a normal shell click it asks to
+    // close the shell — do it smartly"): the confirmation only appears when
+    // REAL WORK is still running under the shell, never for an idle prompt.
+    var confirmBusyCount by remember { mutableStateOf(0) }
+    var closeCheckInFlight by remember { mutableStateOf(false) }
+    val closeScope = rememberCoroutineScope()
+
     /** The focused session when a LIVE tab is selected (history has no PTY). */
     fun focusedLiveSession(): TerminalSession? =
         if (selected < sessions.size) sessions.getOrNull(selected) else null
 
     fun closeNow(s: TerminalSession) {
-        s.finishIfRunning()
-        // Registry.remove finalizes the on-disk record (transcript survives in
-        // history), drops the tab and releases the foreground keep-alive when
-        // nothing else is live.
-        TerminalSessionRegistry.remove(s)
-        selected = when {
-            sessions.isEmpty() -> 0
-            // history tabs live AFTER the live region: losing one live tab
-            // shifts the whole region left by one
-            selected >= sessions.size -> (selected - 1).coerceAtLeast(0)
-            else -> selected.coerceIn(0, sessions.size - 1)
+        // Close kills the session's WHOLE process tree (jobs first, tracer
+        // last): SIGKILL to proot alone can orphan the guest shell and its
+        // background jobs — the dialog's "everything inside it dies" must be
+        // literally true. Registry.remove finalizes the on-disk record
+        // (transcript survives in history), drops the tab and releases the
+        // foreground keep-alive when nothing else is live.
+        closeScope.launch {
+            if (s.isRunning) {
+                withContext(Dispatchers.IO) { ProcTree.killTreeBestEffort(s.getPid()) }
+            }
+            s.finishIfRunning() // belt & braces for the tracer itself
+            TerminalSessionRegistry.remove(s)
+            selected = when {
+                sessions.isEmpty() -> 0
+                // history tabs live AFTER the live region: losing one live tab
+                // shifts the whole region left by one
+                selected >= sessions.size -> (selected - 1).coerceAtLeast(0)
+                else -> selected.coerceIn(0, sessions.size - 1)
+            }
         }
     }
 
-    /** Running shells hold live processes — confirm first; ended tabs close silently. */
+    /**
+     * Smart close entry point (off-main /proc scan):
+     *  - ended tab            -> closes silently
+     *  - idle shell (no jobs) -> closes silently — a normal shell NEVER asks
+     *  - shell with live work -> one confirmation naming the process count
+     */
     fun requestClose(s: TerminalSession?) {
-        if (s == null) return
-        if (s.isRunning) confirmClose = s else closeNow(s)
+        if (s == null || closeCheckInFlight) return
+        if (!s.isRunning) {
+            closeNow(s)
+            return
+        }
+        closeCheckInFlight = true
+        closeScope.launch {
+            val busy = withContext(Dispatchers.IO) {
+                runCatching { ProcTree.busyChildrenOf(s.getPid()) }.getOrDefault(0)
+            }
+            closeCheckInFlight = false
+            // The shell may have exited while the tree was being scanned.
+            if (busy > 0 && s.isRunning) {
+                confirmBusyCount = busy
+                confirmClose = s
+            } else {
+                closeNow(s)
+            }
+        }
     }
 
     /** Clear screen + scrollback of the focused session via the emulator itself. */
@@ -280,9 +323,9 @@ fun TerminalScreen(vm: AppViewModel) {
                         title = { Text("Close this shell?") },
                         text = {
                             Text(
-                                "The shell and everything running inside it will be terminated. " +
-                                    "Background jobs started from this session will not survive. " +
-                                    "Its transcript stays in terminal history.",
+                                "$confirmBusyCount process" + if (confirmBusyCount == 1) " is" else "es are" +
+                                    " still running in this session. Closing kills the shell's whole process" +
+                                    " tree — background jobs will not survive. Its transcript stays in terminal history.",
                             )
                         },
                         confirmButton = {
@@ -503,32 +546,32 @@ private fun SessionTabs(
         sessions.forEachIndexed { i, s ->
             val tick = refreshTick // read to subscribe: session-finish updates labels
             val label = "sh ${i + 1}" + if (!s.isRunning && tick >= 0) " (ended)" else ""
-            TextButton(onClick = { onSelect(i) }, modifier = Modifier.height(30.dp)) {
-                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            // The close affordance is a SIBLING of the tab button, not nested
+            // inside it — a normal tab click (switch shell) can never land on
+            // the close glyph, so switching tabs never asks anything.
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                TextButton(onClick = { onSelect(i) }, modifier = Modifier.height(30.dp)) {
                     Text(
                         label,
                         style = MaterialTheme.typography.labelSmall,
                         fontFamily = FontFamily.Monospace,
                         color = if (i == selected) TermuxForeground else TermuxForeground.copy(alpha = 0.45f),
                     )
-                    Spacer(Modifier.width(4.dp))
-                    // Compact close affordance inside the tab; the whole tab
-                    // remains the primary (switch) touch target. The inner
-                    // clickable consumes the tap, so it never double-fires
-                    // the tab's own onSelect.
-                    Box(
-                        Modifier
-                            .clip(CircleShape)
-                            .clickable { onCloseTab(s) }
-                            .padding(5.dp),
-                    ) {
-                        Text(
-                            "\u2715",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontFamily = FontFamily.Monospace,
-                            color = TermuxForeground.copy(alpha = 0.55f),
-                        )
-                    }
+                }
+                Spacer(Modifier.width(2.dp))
+                Box(
+                    Modifier
+                        .clip(CircleShape)
+                        .clickable { onCloseTab(s) }
+                        .padding(7.dp)
+                        .semantics { contentDescription = "Close sh ${i + 1}" },
+                ) {
+                    Text(
+                        "\u2715",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = TermuxForeground.copy(alpha = 0.55f),
+                    )
                 }
             }
         }
