@@ -41,6 +41,7 @@ val StatusInfoLight = Color(0xFF1D4ED8)
 val StatusNeutralDark = Color(0xFF8A93A6)
 val StatusNeutralLight = Color(0xFF5C6672)
 
-// Terminal screen colors
+// Terminal screen background. The foreground palette lives in the terminal
+// emulator's color scheme (vendored TerminalColorScheme), not here — the
+// TerminalView renders its own glyphs.
 val TerminalBackground = Color(0xFF0A0D11)
-val TerminalForeground = Color(0xFFD6DCE3)

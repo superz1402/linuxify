@@ -12,6 +12,7 @@ import com.linuxify.app.runtime.RootfsInstaller
 import com.linuxify.app.runtime.RuntimeDirs
 import com.linuxify.app.runtime.RuntimeMetadata
 import com.linuxify.app.srv.ServiceManager
+import com.linuxify.app.terminal.TerminalSessionsController
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,6 +33,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val apt = AptManager(app)
     val projects = ProjectsManager(app)
     val services = ServiceManager(app)
+
+    /**
+     * Terminal sessions live at ViewModel scope: navigation and taps never
+     * close, reset, or duplicate the shell (user-reported issue fix).
+     */
+    val terminalSessions = TerminalSessionsController(app, viewModelScope)
 
     private val ctx: Context get() = getApplication<Application>()
 
