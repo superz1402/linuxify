@@ -645,3 +645,28 @@ Stage Summary:
 - Deliverable: linuxify v0.1.0-alpha.18 (release 12,578,162 B + debug 18,856,098 B in the GitHub release + download/).
 - Terminal sessions can finally be closed (explicit + confirmed) and cleared from the UI; the previously unreachable registry.remove/clearHistory paths are live features; the codebase is ~200 lines of verified-dead code lighter.
 - Honest limits: close/clear verified statically + by tests on host; the device drill (open 2 shells → ✕ one → CLR → close) is the user's step, as usual. EnvManager profile install still awaits its UI (flagged in SESSION_STATE).
+
+---
+Task ID: smart-session-close-1
+Agent: Z (main agent, continuation session)
+Task: User feedback on alpha.18: "Even with a normal shell click in terminal it asks to close the shell — do it smartly." Make session close confirmations intelligent.
+
+Work Log:
+- Process note (the stale-clone trap again, now twice): this session started from a clone whose origin/main ref was frozen at b00fb75 (alpha.5); a full smart-close implementation (TerminalSessionsController + ProcTree) was built, tested and PR'd (#24) before a `git pull` revealed origin/main had moved to alpha.18 with its own close/clear feature. PR #24 was closed and the branch deleted; the salvageable part (ProcTree /proc analysis) was re-landed on the REAL main. The alpha.18 SESSION_STATE lesson ("always fetch + inspect origin/main before implementing") is hereby confirmed twice — future sessions must run `git fetch origin && git log HEAD..origin/main --oneline` as the FIRST repo action.
+- Root cause of the complaint (in alpha.18's SessionTabs/requestClose):
+  * requestClose confirmed for EVERY running shell — but an idle prompt IS running (proot tracer + guest bash), so a normal shell could never be closed without the "Close this shell?" nag.
+  * The ✕ was nested INSIDE the tab TextButton — mis-taps while switching tabs could land on it (its clickable consumed the tap → requestClose → dialog).
+- Fix 1 — smart close policy (new terminal/ProcTree.kt + TerminalScreen.requestClose):
+  * /proc snapshot (pid→ppid, tolerant of comm fields containing spaces/parens via lastIndexOf(')')).
+  * "Work" = descendants of root's DIRECT children — the fixed proot→bash spine is deliberately never counted, so an idle shell reports 0 and closes INSTANTLY (no prompt). Only live jobs (apt install, servers, nested shells, TUI apps) produce a count > 0 → one confirmation naming the process count ("3 processes are still running in this session…").
+  * Ended tabs still close silently; shell exiting mid-scan closes silently (race re-checked after the IO hop); double-tap guarded (closeCheckInFlight).
+- Fix 2 — close is now literally true to its dialog: closeNow kills the session's WHOLE process tree (SIGKILL jobs first, tracer last via Os.kill) instead of finishIfRunning() alone — SIGKILL to the proot tracer alone can orphan the guest shell and background jobs. Registry.remove ordering is safe (forget() delegates to finalizeSession(), idempotent).
+- Fix 3 — tab UX: the ✕ is now a SIBLING of the tab button (Row: [TextButton(label)][Spacer 2dp][✕ Box]), so a normal tab click can never hit it; pad 5→7dp (bigger target), added "Close sh N" contentDescription for TalkBack.
+- Dead-code re-scan on the alpha.18 tree (1838 declarations, main+test cross-reference): nothing new beyond test-name/backtick false positives; all strings.xml + drawables verified referenced (vendored Termux + manifest). alpha.18's sweep already removed the real dead weight (~200 lines).
+- Verification: 165/165 unit tests (9 new ProcTreeTest cases: standard/hostile stat parsing, spine-exclusion busy math idle=0/busy=2, cycle-safety, orphan exclusion, degenerate pids); assembleDebug + assembleRelease; apksigner cert SHA-256 8f55e466… unchanged → overwrite install; aapt versionCode 19 / versionName 0.1.0-alpha.19.
+- Shipped: PR #25 squash-merged (main = 4ad0d4b), release v0.1.0-alpha.19 (id 419185642) with release (12,583,930 B) + debug APKs; local copies in download/.
+
+Stage Summary:
+- Closing a NORMAL shell no longer asks anything; only shells with live work ask once, and the kill is now complete (whole tree). Tab switching can no longer trigger a close.
+- Device drill for the user: open 2 shells → ✕ one idle shell (should close INSTANTLY, no dialog) → in the other run `apt install htop` (or `top`) → ✕ → confirm dialog must name the running processes → Close anyway → tab gone, transcript in history.
+- Standing rule for future sessions (violated twice now, documented twice now): fetch + diff against origin/main BEFORE writing a line.

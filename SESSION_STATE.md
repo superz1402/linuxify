@@ -1,8 +1,38 @@
 # SESSION_STATE.md — Linuxify Android
 
-Concise handoff for the next agent session. Current as of 2026-10-20 (Task
-terminal-close-clear-1 — terminal session close/clear UI + dead-code sweep +
-wired terminal-history clearing; v0.1.0-alpha.18, origin/main = this commit).
+Concise handoff for the next agent session. Current as of 2026-10-21 (Task
+smart-session-close-1 — smart close: idle shells close instantly, busy shells
+ask once with a process count, whole-tree kill; v0.1.0-alpha.19, main = 4ad0d4b).
+
+## COMPLETED TASK — smart session close (alpha.19)
+
+- USER FEEDBACK on alpha.18: "Even with a normal shell click in terminal it
+  asks to close the shell — do it smartly."
+- ROOT CAUSES (both in alpha.18's TerminalScreen): (1) requestClose confirmed
+  for EVERY running shell — an idle prompt IS running, so a normal shell never
+  closed without the nag; (2) the ✕ was nested INSIDE the tab TextButton, so
+  tab-switch taps could land on it.
+- FIX — smart policy (new terminal/ProcTree.kt, /proc pid→ppid scan): "work" =
+  descendants of root's DIRECT children; the proot→bash spine is never counted.
+  Ended tab → silent; idle shell → INSTANT close, no prompt; shell with live
+  jobs → one confirmation naming the process count. Scan runs off-main
+  (Dispatchers.IO via rememberCoroutineScope); shell exiting mid-scan → silent
+  close (re-checked after IO); double-tap guarded (closeCheckInFlight).
+- FIX — whole-tree kill: closeNow SIGKILLs the session's entire tree (jobs
+  first, tracer last, Os.kill) instead of finishIfRunning() alone — SIGKILL to
+  the tracer can orphan the guest shell + background jobs. Dialog promise is
+  now literally true. Registry.remove ordering safe (forget→finalize is
+  idempotent).
+- FIX — tab UX: ✕ is a SIBLING of the tab button (Row: [tab][spacer][✕]);
+  normal tab clicks can never hit it; pad 5→7dp; "Close sh N" a11y label.
+- STANDING RULE (violated twice across sessions, now documented twice): FETCH
+  + diff against origin/main BEFORE implementing. This session re-hit the
+  stale-clone trap (built against alpha.5-era b00fb75, opened PR #24, closed
+  it after pull revealed alpha.18); ProcTree was salvaged and re-landed on
+  real main.
+- VERIFY: 165/165 tests (9 new ProcTreeTest); release cert 8f55e466…
+  unchanged; versionCode 19. Device drill: ✕ an idle shell → instant close;
+  run `top` in another → ✕ → dialog names 1+ processes → Close anyway.
 
 ## COMPLETED TASK — terminal close/clear + dead-code sweep (alpha.18)
 
@@ -444,18 +474,18 @@ wired terminal-history clearing; v0.1.0-alpha.18, origin/main = this commit).
 
 ## Next exact actions
 
-1. User installs alpha.18 on device (overwrites alpha.17, same cert). Drill:
-   open two shells (+) → close one via its tab ✕ (confirm dialog appears) →
-   CLR clears screen+scrollback → CLOSE the last one → "No sessions" state.
-   Then Settings > Storage > "Clear terminal history…" and re-visit the
-   terminal history tabs. Plus the outstanding device drills (e)-(h) from
-   alpha.12, (i)-(vi) from alpha.13, (vii)-(viii) from alpha.14.
+1. User installs alpha.19 on device (overwrites alpha.18, same cert). Drill:
+   open two shells (+) → ✕ one IDLE shell (must close INSTANTLY, no dialog) →
+   in the other run `top` → ✕ → confirm dialog must name the running process
+   count → Close anyway → tab gone, transcript in history. Tab-switch taps
+   must never trigger a close. Then Settings > Storage > "Clear terminal
+   history…". Plus the outstanding device drills (e)-(h) from alpha.12,
+   (i)-(vi) from alpha.13, (vii)-(viii) from alpha.14.
 2. Candidate next features: wire the EnvManager profile installer into
    SoftwareScreen (backend `installEnvProfile()`/`installProfile()` is
    complete and waiting — Base/Developer profiles), custom APT repositories,
-   Rust/Cargo adapter, in-app self-update. (The old "session close button"
-   candidate is DONE in alpha.18; the dpkg -l screen idea lost its parser
-   helper — hasInstalledStatus was removed as dead in alpha.18.)
+   Rust/Cargo adapter, in-app self-update. (Session close/clear is DONE and
+   now SMART as of alpha.19.)
 3. Known accepted limitations (documented, not bugs): software op state is
    in-memory only (process death clears the card; installed state re-probes on
    next visit); in-flight installs cannot be cancelled from the UI yet.
