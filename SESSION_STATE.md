@@ -1,8 +1,52 @@
 # SESSION_STATE.md — Linuxify Android
 
 Concise handoff for the next agent session. Current as of 2026-10-21 (Task
-smart-session-close-1 — smart close: idle shells close instantly, busy shells
-ask once with a process count, whole-tree kill; v0.1.0-alpha.19, main = 4ad0d4b).
+signal9-1 — honest session-end causes: signal 9 = Android's phantom process
+killer, ended-session banner + restart + per-version fixes, quiet user closes;
+v0.1.0-alpha.20, main = 4ef04b4).
+
+## COMPLETED TASK — "shell ends for no reason" = Android kills it (alpha.20)
+
+- USER REPORT on alpha.19: "Terminal shell auto crashes and says ended for no
+  reason."
+- ROOT CAUSE (verified against AOSP/Termux history, not a code bug): the
+  session child (proot→bash) is SIGKILLed by ANDROID — on Android 12+ the
+  phantom process killer silently ends apps' forked child processes once a
+  system-wide budget (~32 across ALL apps) is exceeded, or when one burns CPU
+  while its app is backgrounded (Google issuetracker 205156966; Termux #2366
+  = the identical "[Process completed (signal 9)]" reports); LMK + OEM
+  battery managers produce the same signal. Nothing in app/guest crashes —
+  hence no crash report; the old UI surfaced every end as bare "(ended)" and
+  "Run completed — exit code -9", even for closes the USER made.
+- FIX — terminal/SessionEndCause.kt (pure, JVM-tested): exit status → cause.
+  signal 9 → KILLED_BY_ANDROID; 4/6/7/11 → GUEST_CRASH; other negatives →
+  TERMINATED; ≥0 → CLEAN_EXIT. Holds shortLabel/explanation/notification
+  copy + the per-version fix strings + ADB_FIX_COMMANDS (single source for
+  banner, dialog, Settings card, copy button — tests pin the content).
+- FIX — user closes are QUIET: TerminalSessionRegistry.markUserClosed() is
+  recorded BEFORE the kill in closeNow/stopEverythingAndRelease (the exit
+  callback arrives async as SIGKILL -9 and must not read as "killed by
+  Android"). External ends notify honestly — background only, title names
+  the killer. Cleared the old always-notify behavior.
+- FIX — ended-session banner in TerminalScreen (focused live tab when
+  !isRunning, refreshTick-subscribed): cause headline + honest explanation +
+  one-tap "Restart shell" (registry workdirOf — workdirs map added to
+  registry) + "Why / fixes" AlertDialog with Copy ADB commands.
+- FIX — Settings → "Session stability" card: same guidance per Android
+  version (14+: Developer options "Disable child process restrictions";
+  12L/13: settings put global settings_enable_monitor_phantom_procs false;
+  12: device_config max_phantom_processes 2147483647) + copy button.
+- FIX — TerminalPersistence.Record.endCause (JSON "cause", backward
+  compatible; legacy indexes parse with null → old raw fallback label);
+  finalizeSession(ctx, s, exit, cause) is now UPGRADEABLE via knownIds
+  (session→id survives finalize): the async onSessionFinished after a
+  same-instant tab close still writes the real exit code/cause instead of
+  being dropped (previously liveIds.remove-first-return lost it).
+- VERIFY: 175/175 tests (9 new SessionEndCauseTest + legacy-index case);
+  release cert 8f55e466… unchanged (overwrite install); versionCode 20.
+  Device drill: reproduce "ended for no reason" → banner must say "killed by
+  Android (signal 9)" with Restart + fixes; ✕ an idle shell in background →
+  NO "Run completed" notification.
 
 ## COMPLETED TASK — smart session close (alpha.19)
 

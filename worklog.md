@@ -670,3 +670,22 @@ Stage Summary:
 - Closing a NORMAL shell no longer asks anything; only shells with live work ask once, and the kill is now complete (whole tree). Tab switching can no longer trigger a close.
 - Device drill for the user: open 2 shells → ✕ one idle shell (should close INSTANTLY, no dialog) → in the other run `apt install htop` (or `top`) → ✕ → confirm dialog must name the running processes → Close anyway → tab gone, transcript in history.
 - Standing rule for future sessions (violated twice now, documented twice now): fetch + diff against origin/main BEFORE writing a line.
+
+---
+Task ID: signal9-1
+Agent: Z (main agent, continuation session)
+Task: User report on alpha.19 — "Terminal shell auto crashes and says ended for no reason." Diagnose and fix.
+
+Work Log:
+- Root-caused BEFORE touching code: the "ended" tab + "[Process completed (signal 9) - press Enter]" signature is the vendored JNI.waitFor contract reporting a NEGATIVE exit = signal; signal 9 (SIGKILL) to the proot→bash child is ANDROID, not a crash — the Android 12+ phantom process killer (system-wide ~32 child-process budget, CPU-based killing when the app is backgrounded; Google issuetracker 205156966, Termux #2366), plus LMK/OEM battery managers. Verified against AOSP/Termux sources via web research; verified our own FGS/PowerPolicy/persistence loops spawn no stray processes (own timers are pure IO).
+- NEW terminal/SessionEndCause.kt (pure, JVM-tested): exit status → honest cause (9 → KILLED_BY_ANDROID; 4/6/7/11 → GUEST_CRASH; other negatives → TERMINATED; ≥0 → CLEAN_EXIT) + shortLabel/explanation/notification copy + per-version fix strings + ADB_FIX_COMMANDS. One source of truth for banner, dialog, Settings card, and copy button.
+- User closes made silent: TerminalSessionRegistry.markUserClosed() (IdentityHashMap-based) recorded BEFORE the kill in closeNow + stopEverythingAndRelease; onSessionFinished now classifies (USER_CLOSED → no notification, ever), persists the human cause, and notifies only for external ends while backgrounded — "Session killed by Android — sh 2" with the real explanation.
+- Ended-session banner (TerminalScreen): focused ended tab shows cause headline + explanation + one-tap "Restart shell" (new registry workdirs map / workdirOf) + "Why / fixes" dialog with Copy ADB commands. refreshTick-subscribed so the isRunning flip recomposes.
+- Settings → "Session stability" card: phantom-killer explainer + per-version fixes (Android 14+ Developer options "Disable child process restrictions"; 12L/13 settings_enable_monitor_phantom_procs; 12 device_config max_phantom_processes) + copy button.
+- TerminalPersistence: Record.endCause persisted (JSON "cause", backward compatible — legacy alpha.19 indexes parse with null and fall back to the raw label); finalizeSession made UPGRADEABLE via a new knownIds map so the async exit callback after a same-instant tab close still records the true exit code/cause (previously lost by liveIds.remove-first-return). deleteHistory/clearHistory clean knownIds.
+- Shipped: PR #26 squash-merged (main = 4ef04b4); release v0.1.0-alpha.20 (id 419208960) with release (12,593,658 B) + debug (18,880,338 B) APKs; local copies in download/ (release SHA-256 8bc15896…f49db1453).
+- Verification: 175/175 unit tests (9 new SessionEndCauseTest cases + legacy-index compatibility test); assembleDebug+Release OK; apksigner cert SHA-256 8f55e466… unchanged → overwrite install; aapt versionCode 20 / versionName 0.1.0-alpha.20.
+
+Stage Summary:
+- Sessions that die now say WHO killed them (banner + notification + history), user closes are quiet, and the REAL fix on device is one tap away (Settings → Session stability / banner → Why / fixes).
+- Honest limits: an app cannot exempt its child processes from the phantom killer via public API — the per-version device settings are the fix; the app's job (cause honesty + recovery + guidance) is done. Device drill recorded in SESSION_STATE.
