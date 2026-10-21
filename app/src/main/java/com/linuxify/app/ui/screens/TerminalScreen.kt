@@ -65,6 +65,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.linuxify.app.R
 import com.linuxify.app.terminal.ProcTree
 import com.linuxify.app.terminal.PtyTerminal
+import com.linuxify.app.terminal.SessionCloseCopy
 import com.linuxify.app.terminal.SessionEndCause
 import com.linuxify.app.terminal.TerminalPersistence
 import com.linuxify.app.terminal.TerminalSessionRegistry
@@ -327,11 +328,10 @@ fun TerminalScreen(vm: AppViewModel) {
                         onDismissRequest = { confirmClose = null },
                         title = { Text("Close this shell?") },
                         text = {
-                            Text(
-                                "$confirmBusyCount process" + if (confirmBusyCount == 1) " is" else "es are" +
-                                    " still running in this session. Closing kills the shell's whole process" +
-                                    " tree — background jobs will not survive. Its transcript stays in terminal history.",
-                            )
+                            // Built by a pure, unit-tested copy builder: the old inline
+                            // string had a precedence bug that truncated the whole warning
+                            // when exactly ONE process was running.
+                            Text(SessionCloseCopy.confirmBody(confirmBusyCount))
                         },
                         confirmButton = {
                             TextButton(onClick = {

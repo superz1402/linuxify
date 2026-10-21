@@ -3,6 +3,11 @@ package com.linuxify.app.terminal
 import android.content.Context
 import com.linuxify.app.runtime.RuntimeDirs
 import com.termux.terminal.TerminalSession
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -79,6 +84,24 @@ object TerminalPersistence {
 
     private val lastWriteMs = ConcurrentHashMap<String, Long>()
 
+    /**
+     * THE single disk writer for this class — one coroutine at a time, in
+     * enqueue order.
+     *
+     * Why it exists: every disk touch here used to run on the CALLER's thread,
+     * and the callers are the main thread in the three paths that matter most:
+     * spawn (register → index write), session end (finalize → up to a few
+     * hundred KB of transcript + index — a visible frame hang exactly when the
+     * shell ends), and ON_STOP (flushAll — a multi-file flash write while the
+     * user is mid-backgrounding gesture). All writes now land on this serial
+     * queue: order is preserved (a queued final snapshot always beats a later
+     * queued delete), tmp+rename never interleaves, and the caller returns
+     * instantly. The foreground service keeps the process alive in the
+     * background, so an ON_STOP flush still completes.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val writeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
+
     // ---- paths -------------------------------------------------------------
 
     fun dir(ctx: Context): File = RuntimeDirs.terminalDir(ctx)
@@ -97,7 +120,8 @@ object TerminalPersistence {
         knownIds[session] = rec.id
         synchronized(records) { records[rec.id] = rec }
         dirty.add(session)
-        runCatching { logFile(ctx, rec.id).writeText("") }
+        val emptyLog = logFile(ctx, rec.id)
+        writeScope.launch { runCatching { emptyLog.writeText("") } }
         writeIndex(ctx)
     }
 
@@ -189,10 +213,11 @@ object TerminalPersistence {
     fun deleteHistory(ctx: Context, id: String): Boolean {
         if (liveIds.containsValue(id)) return false
         val removed = synchronized(records) { records.remove(id) } != null
-        logFile(ctx, id).delete()
         if (removed) {
             knownIds.values.removeAll { it == id }
             writeIndex(ctx)
+            val f = logFile(ctx, id)
+            writeScope.launch { runCatching { f.delete() } }
         }
         return removed
     }
@@ -205,10 +230,13 @@ object TerminalPersistence {
             d.forEach { records.remove(it) }
             d
         }
-        doomed.forEach { logFile(ctx, it).delete() }
         if (doomed.isNotEmpty()) {
             knownIds.values.removeAll { it in doomed }
             writeIndex(ctx)
+            doomed.forEach { id ->
+                val f = logFile(ctx, id)
+                writeScope.launch { runCatching { f.delete() } }
+            }
         }
         return doomed.size
     }
@@ -227,26 +255,38 @@ object TerminalPersistence {
         if (lastSnapshot[id] == transcript.hashCode()) return
         val out = logFile(ctx, id)
         val tmp = File(out.parentFile, "${out.name}.tmp")
-        runCatching {
-            tmp.writeText(transcript)
-            if (!tmp.renameTo(out)) {
-                // rename can fail across mount boundaries — fall back to copy
-                tmp.copyTo(out, overwrite = true)
-                tmp.delete()
+        // Disk write runs on the single serial writer (see writeScope): the
+        // caller — frequently the MAIN thread via finalize/ON_STOP — returns
+        // immediately instead of blocking on flash. The skip-hash is recorded
+        // only AFTER a successful write, so a failed write is retried by the
+        // next sweep instead of being silently dropped forever.
+        writeScope.launch {
+            runCatching {
+                tmp.writeText(transcript)
+                if (!tmp.renameTo(out)) {
+                    // rename can fail across mount boundaries — fall back to copy
+                    tmp.copyTo(out, overwrite = true)
+                    tmp.delete()
+                }
+                lastSnapshot[id] = transcript.hashCode()
             }
-            lastSnapshot[id] = transcript.hashCode()
         }
     }
 
     private fun writeIndex(ctx: Context) {
-        val json = synchronized(records) { indexJson(records.values.toList()) }
-        runCatching {
-            val f = indexFile(ctx)
-            val tmp = File(f.parentFile, "$INDEX_FILE.tmp")
-            tmp.writeText(json)
-            if (!tmp.renameTo(f)) {
-                tmp.copyTo(f, overwrite = true)
-                tmp.delete()
+        val f = indexFile(ctx)
+        val tmp = File(f.parentFile, "$INDEX_FILE.tmp")
+        // JSON is serialized at EXECUTION time on the single writer thread, so
+        // the final file always reflects the freshest record state regardless
+        // of enqueue order.
+        writeScope.launch {
+            runCatching {
+                val json = synchronized(records) { indexJson(records.values.toList()) }
+                tmp.writeText(json)
+                if (!tmp.renameTo(f)) {
+                    tmp.copyTo(f, overwrite = true)
+                    tmp.delete()
+                }
             }
         }
     }

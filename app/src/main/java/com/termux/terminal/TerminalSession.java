@@ -39,9 +39,10 @@ public final class TerminalSession extends TerminalOutput {
 
     /**
      * A queue written to from a separate thread when the process outputs, and read by main thread to process by
-     * terminal emulator.
+     * terminal emulator. 64 KiB (upstream master's size): a larger ring smooths heavy output bursts
+     * (cat/build logs) across busy main-thread frames instead of stalling the child every 4 KiB.
      */
-    final ByteQueue mProcessToTerminalIOQueue = new ByteQueue(4096);
+    final ByteQueue mProcessToTerminalIOQueue = new ByteQueue(64 * 1024);
     /**
      * A queue written to from the main thread due to user interaction, and read by another thread which forwards by
      * writing to the {@link #mTerminalFileDescriptor}.
@@ -232,7 +233,11 @@ public final class TerminalSession extends TerminalOutput {
 
     /** Finish this terminal session by sending SIGKILL to the shell. */
     public void finishIfRunning() {
-        if (isRunning()) {
+        // mShellPid > 0 is REQUIRED, not cosmetic: a session that was constructed but never
+        // laid out (no updateSize -> no initializeEmulator -> no fork) still reports
+        // isRunning() == true with mShellPid == 0, and kill(0) is POSIX "signal the entire
+        // CALLER's process group" — i.e. kill(0, SIGKILL) would murder this app itself.
+        if (isRunning() && mShellPid > 0) {
             try {
                 Os.kill(mShellPid, OsConstants.SIGKILL);
             } catch (ErrnoException e) {
@@ -347,6 +352,20 @@ public final class TerminalSession extends TerminalOutput {
 
             if (msg.what == MSG_PROCESS_EXITED) {
                 int exitCode = (Integer) msg.obj;
+
+                // Drain EVERYTHING the child still had in flight before cleanupResources()
+                // closes the queues. The old single 4 KB read silently dropped the tail of a
+                // command's output — the last lines of `apt install`, a script's dying error —
+                // exactly at the moment the user most needs to read it. Bounded loop: the
+                // process is dead, so at most one full ring (64 KiB) plus a few in-flight
+                // PTY chunks can arrive; 32 x 4 KB covers it and can never spin forever.
+                int drained;
+                int guard = 0;
+                while (guard++ < 32 && (drained = mProcessToTerminalIOQueue.read(mReceiveBuffer, false)) > 0) {
+                    mEmulator.append(mReceiveBuffer, drained);
+                }
+                if (guard > 1) notifyScreenUpdate();
+
                 cleanupResources(exitCode);
 
                 String exitDescription = "\r\n[Process completed";

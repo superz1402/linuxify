@@ -553,8 +553,13 @@ public final class TerminalView extends View {
                 ClipboardManager clipboard = (ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);
                 ClipData clipData = clipboard.getPrimaryClip();
                 if (clipData != null) {
-                    CharSequence paste = clipData.getItemAt(0).coerceToText(getContext());
-                    if (!TextUtils.isEmpty(paste)) mEmulator.paste(paste.toString());
+                    // getItemAt(0) returns null for a zero-item clip — coerceToText on
+                    // that is an NPE (guard matches upstream master).
+                    ClipData.Item clipItem = clipData.getItemAt(0);
+                    if (clipItem != null) {
+                        CharSequence paste = clipItem.coerceToText(getContext());
+                        if (!TextUtils.isEmpty(paste)) mEmulator.paste(paste.toString());
+                    }
                 }
             } else if (mEmulator.isMouseTrackingActive()) { // BUTTON_PRIMARY.
                 switch (event.getAction()) {
@@ -974,7 +979,9 @@ public final class TerminalView extends View {
     @RequiresApi(api = Build.VERSION_CODES.O)
     @Override
     public void autofill(AutofillValue value) {
-        if (value.isText()) {
+        // The autofill framework can call this before any session is attached
+        // (mTermSession null) — writing to null is an instant crash.
+        if (value.isText() && mTermSession != null) {
             mTermSession.write(value.getTextValue().toString());
         }
     }

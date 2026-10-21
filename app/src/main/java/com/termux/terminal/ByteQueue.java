@@ -29,7 +29,13 @@ final class ByteQueue {
                 return 0;
             }
         }
-        if (!mOpen) return -1;
+        // close() means "no NEW data after this point", not "discard what is
+        // already buffered": the reader keeps draining stored bytes and only
+        // then gets the -1 EOF. Without this, output written by the child right
+        // before it exited was thrown away at cleanup time (the terminal's
+        // "[Process completed]" notice would land without the command's last
+        // lines).
+        if (!mOpen && mStoredBytes == 0) return -1;
 
         int totalRead = 0;
         int bufferLength = mBuffer.length;
